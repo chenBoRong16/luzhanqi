@@ -352,6 +352,10 @@
     });
     for (const s of [0, 1]) if (!hq[s].length) err(`${s === 0 ? "我方" : "對方"}沒有大本營`);
     if (!map.crossings.some((k) => k !== "mountain")) err("至少要有一個過河口");
+    // 公路橋可能全被炸斷，雙方會完全隔開（只能拖成和局），所以至少要有一條鐵路過河
+    else if (!(map.rails || []).some((r) => r.path.some((p, i) => i > 0 && p[0] !== r.path[i - 1][0]))) {
+      err("至少要有一條鐵路過河（公路橋可能全被炸斷，雙方會完全隔開）");
+    }
 
     // 鐵路：兩端要相鄰；不能經過沼澤、高山；過河只能走「鐵路」過河口
     const half = cols * rows;

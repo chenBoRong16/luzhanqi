@@ -194,7 +194,7 @@
     const isHQ = nd.hq;
     if (nd.mountain) return "高山不能放棋";
     if (isCamp) return "行營開局必須空著";
-    if (nd.swamp && (T.kind === "bomb" || T.kind === "mine" || T.kind === "flag" || T.kind === "radar")) {
+    if (nd.swamp && (T.kind === "tank" || T.kind === "mine" || T.kind === "flag" || T.kind === "radar")) {
       return `沼澤不能放${T.name}`;
     }
     if (T.kind === "flag" && !isHQ) return "軍旗必須放在大本營";
@@ -429,8 +429,10 @@
     if (!T.mobile || V.nodes[from].hq) return out;
     const seen = new Set();
     const add = (to, kind) => { if (!seen.has(to)) { seen.add(to); out.push({ to, kind }); } };
-    // 沼澤：坦克、炸彈進不去（含攻擊沼澤裡的棋）
-    const swampBan = R.swamp && (T.kind === "tank" || T.kind === "bomb");
+    // 沼澤：坦克進不去（含攻擊沼澤裡的棋）；炸彈是步兵背的炸藥，可以進去
+    const swampBan = R.swamp && T.kind === "tank";
+    // 坦克走兩格時，中間那格除了要空，也不能是沼澤或森林（整段路要暢通）
+    const tankBlocked = (n) => (R.swamp && V.nodes[n].swamp) || (R.forest && V.nodes[n].forest);
     // 回傳是否可以穿過（空格）
     const consider = (to) => {
       if (swampBan && V.nodes[to].swamp) return false;
@@ -487,12 +489,29 @@
       }
     }
 
+    // 窄軌可沿線轉彎：坦克、工兵以外的棋順著窄軌走，合計最多 3 格；換軌站要停下（起點除外）
+    if (R.gauge && V.railEdge && V.nodes[from].rail && !villageStart && T.kind !== "tank" && T.kind !== "engineer") {
+      const used = new Map([[from, 0]]);
+      const queue = [from];
+      while (queue.length) {
+        const u = queue.shift();
+        if (u !== from && V.nodes[u].gaugeBreak) continue;
+        const k = used.get(u) + 1;
+        if (k > 3) continue;
+        for (const v of V.railAdj[u]) {
+          if (used.has(v) || V.railEdge.get(u < v ? `${u}-${v}` : `${v}-${u}`) !== "narrow") continue;
+          used.set(v, k);
+          if (consider(v)) queue.push(v);
+        }
+      }
+    }
+
     if (T.kind === "tank" && !villageStart) {
       if (R.tankTurn) {
         // 兩步正交，可以轉一次彎；第一步必須是空格
         for (const [dx, dy] of ORTH) {
           const m = stepOrth(S, from, dx, dy);
-          if (m < 0 || B[m]) continue;
+          if (m < 0 || B[m] || tankBlocked(m)) continue;
           for (const [ex, ey] of ORTH) {
             if (ex === -dx && ey === -dy) continue;
             const k = stepOrth(S, m, ex, ey);
@@ -504,7 +523,7 @@
         for (const m of roadNbrs(S, from)) {
           const b = V.nodes[m];
           const dx = b.gx - a.gx, dy = b.gy - a.gy;
-          if (Math.abs(dx) + Math.abs(dy) !== 1 || B[m]) continue;
+          if (Math.abs(dx) + Math.abs(dy) !== 1 || B[m] || tankBlocked(m)) continue;
           for (const k of roadNbrs(S, m)) {
             const c = V.nodes[k];
             if (c.gx - b.gx === dx && c.gy - b.gy === dy) consider(k);
@@ -583,7 +602,8 @@
         const k = stepOrth(S, m, dx, dy);
         if (k < 0) continue;
         const q = B[k];
-        if (q && q.side !== side && !V.nodes[k].camp && !(R.forest && V.nodes[k].forest)) {
+        // 行營、森林、村莊裡的棋不能當目標（建築物、樹林擋住視線）
+        if (q && q.side !== side && !V.nodes[k].camp && !(R.forest && V.nodes[k].forest) && !(R.village && V.nodes[k].village)) {
           out.push({ to: k, kind: "snipe" });
         }
       }
@@ -665,7 +685,14 @@
     for (const [li] of V.lineIndex[from]) if (V.lineIndex[to].some(([lj]) => lj === li)) line = li;
     if (line >= 0 || (kind === "engineer" && V.nodes[to].rail)) {
       if (R.gauge && V.nodes[to].gaugeBreak) { S.stats.gaugeStop[p.side]++; ev.gaugeStop = true; }
-      if (R.gauge && line >= 0 && V.lineGauge[line] === "narrow") { S.stats.narrow[p.side]++; ev.narrow = true; }
+      // 窄軌：沿窄軌直線走，或工兵轉彎走到窄軌上的格子
+      const onNarrow = (x) => V.railEdge && V.railAdj[x].some((y) => V.railEdge.get(x < y ? `${x}-${y}` : `${y}-${x}`) === "narrow");
+      if (R.gauge && (line >= 0 ? V.lineGauge[line] === "narrow" : onNarrow(to))) { S.stats.narrow[p.side]++; ev.narrow = true; }
+    } else if (R.gauge && kind !== "tank" && V.nodes[from].rail && V.nodes[to].rail) {
+      // 不在同一條直線上、又不是相鄰：只可能是沿窄軌轉彎
+      if (V.nodes[to].gaugeBreak) { S.stats.gaugeStop[p.side]++; ev.gaugeStop = true; }
+      S.stats.narrow[p.side]++;
+      ev.narrow = true;
     } else if (kind === "tank" && R.plain && V.nodes[from].plain && V.nodes[to].plain && !withinTwo(S, from, to)) {
       S.stats.tank3[p.side]++;
       ev.tank3 = true;
@@ -842,6 +869,8 @@
       ev.defender = q.t;
       ev.result = r;
       if (R.bunker && V.nodes[mv.to].bunker) S.stats.bunkerDef[q.side]++;
+      // 統計與音效：衝 3 格撞棋、沿窄軌撞棋也算用到地形（不影響規則）
+      terrainMoveStats(S, from, mv.to, p, ev);
       // 雙方各自從結果推理對方的棋
       q.cand[p.side] = filterMask(V, q.cand[p.side], (X) => resolveAt(V, T, X, mv.to) === r);
       p.cand[opp] = filterMask(V, p.cand[opp] & V.mobileMask, (X) => resolveAt(V, X, D, mv.to) === r);
