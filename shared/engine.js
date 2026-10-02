@@ -1005,6 +1005,6 @@
     resolveRules, buildVariant, placementError, originMask, resolve, resolveAt, defRank, snipeHits,
     rankedKind, newGame, makePiece, setSideGrid, sideGrid, validateSide, startPlay, movesFor, legalMoves,
     hasAnyMove, applyMove, popcount, singleType, snapshot, restore, swapSides, cheatAdd, cheatDelete,
-    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, namesGrid,
+    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, namesGrid, newStats,
   });
 })(typeof window !== "undefined" ? window : globalThis);

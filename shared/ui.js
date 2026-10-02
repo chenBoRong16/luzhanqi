@@ -7,8 +7,6 @@
 
   // 重新掛載（例如切換規則組）時保留的介面設定
   const persist = {
-    level: { me: "hardest", foe: "hardest" },
-    style: { me: "balanced", foe: "balanced" },
     speed: 500, hints: true, first: 0, suggest: false, replaySfx: false,
     cheat: null, pending: null,
   };
@@ -26,7 +24,8 @@
   function mountApp(app) {
     if (unmountPrev) unmountPrev();
     const ac = new AbortController();
-    unmountPrev = () => ac.abort();
+    let stopAll = () => {};
+    unmountPrev = () => { ac.abort(); stopAll(); };
     const on = (target, type, fn) => target.addEventListener(type, fn, { signal: ac.signal });
 
     // 擴充版：讀取上次的規則組與地圖，重建 variant
@@ -62,13 +61,13 @@
     const rulesHtml = typeof V.rulesHtml === "function" ? V.rulesHtml(V) : V.rulesHtml;
 
     let S = null;
-    if (!persist.style) persist.style = { me: "balanced", foe: "balanced" };
     const ui = {
       sel: null, legal: [], editSide: "me", editType: 0,
       hints: persist.hints, aiTimer: null, confirmUntil: 0, first: persist.first, flash: "",
-      level: persist.level, style: persist.style, watch: false, speed: persist.speed,
+      watch: false, speed: persist.speed,
       replay: null, // { rec, k, total, S }
       suggestOn: persist.suggest, suggestion: null, suggestKey: "",
+      think: null, thinkTick: null, // 正在思考：{ side, purpose: "move"|"suggest", key, handle }
     };
 
     // ---------- 骨架 ----------
@@ -123,46 +122,13 @@
             <button type="button" class="small" data-act="clearMarks">清除所有標記</button>
           </div>
           <div class="card">
-            <div class="card-title">電腦</div>
-            <div class="sub-title">對手難度</div>
-            <div class="seg" data-group="lv-foe">
-              <button type="button" data-lv="foe:easy">簡單</button>
-              <button type="button" data-lv="foe:medium">中等</button>
-              <button type="button" data-lv="foe:hard">困難</button>
-              <button type="button" data-lv="foe:hardest">最難</button>
-            </div>
-            <div class="sub-title">對手個性</div>
-            <div class="seg wrap" data-group="st-foe">
-              <button type="button" data-st="foe:balanced" title="攻守大致平均">均衡</button>
-              <button type="button" data-st="foe:aggressive" title="愛打、少躲">猛攻</button>
-              <button type="button" data-st="foe:cautious" title="惜子、重避險">穩守</button>
-              <button type="button" data-st="foe:rusher" title="往前擠、愛空降">衝鋒</button>
-              <button type="button" data-st="foe:defender" title="死守己方半場與軍旗">護旗</button>
-              <button type="button" data-st="foe:prober" title="愛偵察／狙擊摸底">試探</button>
-              <button type="button" data-st="foe:gambler" title="亂、愛換子與炸彈">賭徒</button>
-            </div>
-            <div class="sub-title">幫我下的電腦 · 難度</div>
-            <div class="seg" data-group="lv-me">
-              <button type="button" data-lv="me:easy">簡單</button>
-              <button type="button" data-lv="me:medium">中等</button>
-              <button type="button" data-lv="me:hard">困難</button>
-              <button type="button" data-lv="me:hardest">最難</button>
-            </div>
-            <div class="sub-title">幫我下的電腦 · 個性</div>
-            <div class="seg wrap" data-group="st-me">
-              <button type="button" data-st="me:balanced" title="攻守大致平均">均衡</button>
-              <button type="button" data-st="me:aggressive" title="愛打、少躲">猛攻</button>
-              <button type="button" data-st="me:cautious" title="惜子、重避險">穩守</button>
-              <button type="button" data-st="me:rusher" title="往前擠、愛空降">衝鋒</button>
-              <button type="button" data-st="me:defender" title="死守己方半場與軍旗">護旗</button>
-              <button type="button" data-st="me:prober" title="愛偵察／狙擊摸底">試探</button>
-              <button type="button" data-st="me:gambler" title="亂、愛換子與炸彈">賭徒</button>
-            </div>
+            <div class="card-title">電腦（AI 設置）</div>
+            <div class="ai-panel"></div>
             <label class="check"><input type="checkbox" data-act="suggestToggle"> 標示 AI 建議（輪到你時，盤面標出「幫我下的電腦」建議的下一步）</label>
             <div class="row wrap">
               <button type="button" data-act="autoMove">電腦代走一步</button>
             </div>
-            <div class="sub-title">觀戰：兩個電腦對打（各用上面的難度＋個性）</div>
+            <div class="sub-title">觀戰：兩個電腦對打（各用上面的 AI 設置）。速度＝每手至少停多久，電腦想得更久就等它想完</div>
             <div class="row wrap">
               <button type="button" data-act="watch">開始觀戰</button>
               <div class="seg small" data-group="speed">
@@ -228,6 +194,15 @@
     for (const T of V.types) selType.add(new Option(T.name, T.idx));
     $('[data-act="hints"]').checked = ui.hints;
     $('[data-act="suggestToggle"]').checked = ui.suggestOn;
+    const aiPanel = LZ.mountAiPanel($(".ai-panel"), V, {
+      onChange(who, set, what) {
+        S.log.push(what);
+        ui.suggestKey = "";
+        if (ui.think && ui.think.purpose === "suggest") cancelThink();
+        render();
+      },
+    });
+    stopAll = () => { cancelThink(); clearTimeout(ui.aiTimer); };
 
     elSvg.innerHTML = LZ.drawBoard(V);
     const cellEls = buildCells();
@@ -266,6 +241,7 @@
 
     function newMatch(myGrid, foeGrid) {
       clearTimeout(ui.aiTimer);
+      cancelThink();
       ui.watch = false;
       ui.replay = null;
       const keep = S ? Object.assign({}, S.cheat) : persist.cheat;
@@ -291,6 +267,7 @@
     }
 
     function afterMove(ev, prevPhase) {
+      if (ui.think && ui.think.purpose === "suggest") cancelThink();
       if (LZ.audio && ev) LZ.audio.playEvent(ev, S.human);
       if (LZ.audio && prevPhase === "play" && S.phase === "end") {
         LZ.audio.playOutcome(S.winner, S.human);
@@ -299,21 +276,52 @@
 
     // ---------- 電腦 ----------
     function aiSide() { return 1 - S.human; }
-    function levelOf(side) { return side === S.human ? ui.level.me : ui.level.foe; }
-    function styleOf(side) { return side === S.human ? ui.style.me : ui.style.foe; }
+    function whoOf(side) { return side === S.human ? "me" : "foe"; }
+    /** side 這方電腦的 AI 設置（深度、個性、細項、長考上限） */
+    function settingsOf(side) { return aiPanel.get(whoOf(side)); }
     /** 只有我方電腦、且上帝視角開著並勾選「餵給電腦」時才看得見；對手電腦永遠不偷看 */
     function aiOpts(side) {
-      return {
-        omniscient: side === S.human && S.cheat.reveal && !!S.cheat.feed,
-        style: styleOf(side),
-      };
+      return { omniscient: side === S.human && S.cheat.reveal && !!S.cheat.feed };
     }
-    /** 電腦替 side 走一步（替我方走時先存悔棋點） */
-    function computerMove(side) {
+    /** 局面識別：思考途中局面變了（悔棋、作弊、換邊…），想出來的結果就作廢 */
+    function stateKey() {
+      return `${S.ply}|${S.rec.length}|${S.turn}|${S.phase}|${S.history.length}|${S.cheat.reveal && S.cheat.feed}`;
+    }
+    function cancelThink() {
+      if (ui.think) { ui.think.handle.cancel(); ui.think = null; }
+      clearInterval(ui.thinkTick);
+      ui.thinkTick = null;
+    }
+    /** 分段思考（不卡畫面）；想完呼叫 done(pick)。局面在途中變了就丟掉結果 */
+    function startThink(side, purpose, done) {
+      cancelThink();
+      const t = { side, purpose, key: stateKey(), handle: null };
+      ui.think = t;
+      t.handle = LZ.aiThink(S, side, Math.random, settingsOf(side), aiOpts(side), (res) => {
+        if (ui.think !== t) return;
+        ui.think = null;
+        clearInterval(ui.thinkTick);
+        ui.thinkTick = null;
+        aiPanel.setLast(whoOf(side), res);
+        if (stateKey() !== t.key) { render(); return; }
+        done(res.pick);
+      });
+      ui.thinkTick = setInterval(() => {
+        const el = elStatus.querySelector(".think-sec");
+        if (el && ui.think) el.textContent = (ui.think.handle.elapsed() / 1000).toFixed(1);
+      }, 200);
+    }
+    /** 電腦替 side 走 pick 這一步（替我方走時先存悔棋點） */
+    function playAiPick(side, pick) {
       if (side === S.human) pushHistory();
       ui.sel = null; ui.legal = [];
       const prevPhase = S.phase;
-      const ev = LZ.aiTurn(S, side, Math.random, levelOf(side), aiOpts(side));
+      let ev = null;
+      if (pick) {
+        if (!S.lastMoves) S.lastMoves = [null, null];
+        S.lastMoves[side] = { from: pick.from, to: pick.mv.to };
+        ev = LZ.applyMove(S, pick.from, pick.mv);
+      }
       afterMove(ev, prevPhase);
       return ev;
     }
@@ -321,20 +329,35 @@
       S.history.push(LZ.snapshot(S));
       if (S.history.length > 300) S.history.shift();
     }
+    /** 該電腦走時：先思考，想完再等到「每手至少停多久」才走 */
     function scheduleAI() {
       clearTimeout(ui.aiTimer);
       ui.aiTimer = null;
+      if (ui.think && ui.think.purpose === "move") cancelThink();
       if (S.phase !== "play") { ui.watch = false; return; }
+      if (ui.replay) return;
       const auto = ui.watch || (S.turn === aiSide() && !S.cheat.infinite);
       if (!auto) return;
+      const side = S.turn;
+      const t0 = Date.now();
+      const minWait = ui.watch ? ui.speed : 380;
+      const still = (key) => S.phase === "play" && !ui.replay && (ui.watch || S.turn === aiSide()) && stateKey() === key;
       ui.aiTimer = setTimeout(() => {
         ui.aiTimer = null;
-        if (S.phase !== "play" || ui.replay) return;
-        if (!ui.watch && S.turn !== aiSide()) return;
-        computerMove(S.turn);
+        const key = stateKey();
+        if (!still(key)) return;
+        startThink(side, "move", (pick) => {
+          ui.aiTimer = setTimeout(() => {
+            ui.aiTimer = null;
+            if (!still(key)) return;
+            playAiPick(side, pick);
+            render();
+            scheduleAI();
+          }, Math.max(0, minWait - (Date.now() - t0)));
+          render();
+        });
         render();
-        scheduleAI();
-      }, ui.watch ? ui.speed : 380);
+      }, 0);
       render();
     }
 
@@ -678,13 +701,22 @@
       }
     }
 
-    /** 標示 AI 建議：同一個局面只算一次（電腦有隨機性，重算會跳來跳去） */
+    /** 標示 AI 建議：同一個局面只算一次（電腦有隨機性，重算會跳來跳去）；深度高時在背景想 */
     function currentSuggestion() {
       if (!ui.suggestOn || ui.replay || ui.watch || S.phase !== "play" || S.turn !== S.human) return null;
-      const key = `${S.ply}|${S.rec.length}|${S.turn}|${ui.level.me}|${ui.style.me}|${S.cheat.reveal && S.cheat.feed}`;
+      const key = stateKey();
       if (ui.suggestKey !== key) {
         ui.suggestKey = key;
-        ui.suggestion = LZ.aiChooseMove(S, S.human, Math.random, ui.level.me, aiOpts(S.human));
+        ui.suggestion = null;
+        setTimeout(() => {
+          if (ui.suggestKey !== key || stateKey() !== key || (ui.think && ui.think.purpose === "move")) return;
+          if (!ui.suggestOn || ui.replay || ui.watch || S.phase !== "play" || S.turn !== S.human) return;
+          startThink(S.human, "suggest", (pick) => {
+            if (ui.suggestKey === key) ui.suggestion = pick;
+            render();
+          });
+          renderStatus();
+        }, 0);
       }
       return ui.suggestion;
     }
@@ -777,6 +809,12 @@
           const res = S.winner === -1 ? "和棋" : S.winner === me ? "你贏了" : "電腦贏了";
           head = `<div class="phase end ${S.winner === me ? "win" : S.winner === -1 ? "" : "lose"}">${res}</div><p>${S.endReason}</p>`;
         }
+        if (ui.think && playing) {
+          const sec = (ui.think.handle.elapsed() / 1000).toFixed(1);
+          head += ui.think.purpose === "move"
+            ? `<div class="think-row">電腦思考中… <span class="think-sec">${sec}</span> 秒 <button type="button" class="small" data-act="thinkNow">立刻下</button></div>`
+            : `<div class="think-row">AI 建議計算中… <span class="think-sec">${sec}</span> 秒 <button type="button" class="small" data-act="thinkNow">立刻給建議</button></div>`;
+        }
         const restartLabel = playing ? (Date.now() < ui.confirmUntil ? "再按一次確定" : "重新開始") : "再來一局";
         html = `${head}${quietTrack(S)}
           <div class="row wrap">
@@ -861,17 +899,9 @@
         const ms = app.querySelector('[data-act="mapSelect"]');
         if (ms) ms.disabled = locked;
       }
-      for (const b of app.querySelectorAll("[data-lv]")) {
-        const [who, lv] = b.dataset.lv.split(":");
-        b.classList.toggle("on", ui.level[who] === lv);
-      }
-      for (const b of app.querySelectorAll("[data-st]")) {
-        const [who, st] = b.dataset.st.split(":");
-        b.classList.toggle("on", ui.style[who] === st);
-      }
       for (const b of app.querySelectorAll("[data-speed]")) b.classList.toggle("on", Number(b.dataset.speed) === ui.speed);
       const myTurn = !ui.replay && S.phase === "play" && S.turn === S.human && !ui.watch;
-      app.querySelector('[data-act="autoMove"]').disabled = !myTurn;
+      app.querySelector('[data-act="autoMove"]').disabled = !myTurn || !!(ui.think && ui.think.purpose === "move");
       const bw = app.querySelector('[data-act="watch"]');
       bw.textContent = ui.watch ? "暫停觀戰" : S.phase === "end" ? "觀戰（本局已結束）" : "開始觀戰";
       bw.disabled = S.phase === "end" || !!ui.replay;
@@ -903,6 +933,7 @@
     // ---------- 複盤 ----------
     function openReplay(rec) {
       clearTimeout(ui.aiTimer);
+      cancelThink();
       ui.watch = false;
       const total = LZ.recordSteps(rec).length;
       ui.replay = { rec, total, k: total, S: null };
@@ -968,23 +999,6 @@
       if (!b || elPop.contains(b) || elModal.contains(b)) return;
       if (b.dataset.first != null) { ui.first = persist.first = Number(b.dataset.first); render(); return; }
       if (b.dataset.side) { ui.editSide = b.dataset.side; render(); return; }
-      if (b.dataset.lv) {
-        const [who, lv] = b.dataset.lv.split(":");
-        ui.level[who] = lv;
-        S.log.push(`${who === "me" ? "幫我下的電腦" : "對手"}難度：${LZ.AI_LEVELS[lv].name}`);
-        ui.suggestKey = "";
-        render();
-        return;
-      }
-      if (b.dataset.st) {
-        const [who, st] = b.dataset.st.split(":");
-        ui.style[who] = st;
-        const P = LZ.AI_PERSONAS[st];
-        S.log.push(`${who === "me" ? "幫我下的電腦" : "對手"}個性：${P ? P.name : st}${P?.blurb ? `（${P.blurb}）` : ""}`);
-        ui.suggestKey = "";
-        render();
-        return;
-      }
       if (b.dataset.speed) { ui.speed = persist.speed = Number(b.dataset.speed); render(); return; }
       const act = b.dataset.act;
       if (!act) return;
@@ -1037,10 +1051,16 @@
           render();
           return scheduleAI();
         case "autoMove":
-          if (S.phase !== "play" || S.turn !== S.human) return;
-          computerMove(S.human);
-          render();
-          return scheduleAI();
+          if (S.phase !== "play" || S.turn !== S.human || (ui.think && ui.think.purpose === "move")) return;
+          startThink(S.human, "move", (pick) => {
+            playAiPick(S.human, pick);
+            render();
+            scheduleAI();
+          });
+          return render();
+        case "thinkNow":
+          if (ui.think) ui.think.handle.stop();
+          return;
         case "watch":
           if (ui.watch) {
             ui.watch = false;
@@ -1062,6 +1082,7 @@
           const snap = S.history.pop();
           if (!snap) return;
           clearTimeout(ui.aiTimer);
+          cancelThink();
           ui.watch = false;
           LZ.restore(S, snap);
           S.cheat.used = true;

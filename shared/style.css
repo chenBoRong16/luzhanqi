@@ -353,3 +353,17 @@ ul.legend li { margin: 3px 0; }
 .tool-opts .seg { margin-bottom: 4px; }
 .ok-c { color: #7fd38a; }
 .bad-c { color: #f08a7e; }
+
+/* ---------- AI 設置 ---------- */
+.ai-set { padding-bottom: 8px; }
+.ai-set + .ai-set { border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 2px; }
+.ai-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: var(--accent); color: #1d1a12; font-size: 11px; letter-spacing: 0; }
+.ai-est { min-height: 1.3em; }
+.ai-limit { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: 13px; color: var(--muted); }
+.ai-adv { margin-top: 6px; }
+.ai-adv summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.ai-knob { display: grid; grid-template-columns: 4em 1fr 3em; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; }
+.ai-knob input[type=range] { width: 100%; min-width: 0; }
+.ai-knob output { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.think-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; font-size: 14px; }
+.think-sec { font-variant-numeric: tabular-nums; min-width: 2.5em; display: inline-block; text-align: right; }

@@ -158,11 +158,19 @@
     },
   };
 
+  /** 某一級在這個版本的參數（含版本覆寫 V.aiLevels） */
+  function levelParams(V, level) {
+    return Object.assign({}, LEVELS[level] || LEVELS.hardest, (V.aiLevels || {})[level]);
+  }
+
+  /** level：難度鍵（"hard"…），或一組設定 {noise, attack, danger, flag, smart}（AI 設置的細項） */
   function resolveBrain(V, level, style) {
-    const base = Object.assign({}, LEVELS[level] || LEVELS.hardest, (V.aiLevels || {})[level]);
+    const base = level && typeof level === "object"
+      ? Object.assign({ name: "自訂", noise: 0, attack: 1, danger: 0, flag: 1 }, level)
+      : levelParams(V, level);
     const P = PERSONAS[style] || PERSONAS.balanced;
     return {
-      levelKey: level,
+      levelKey: typeof level === "string" ? level : "custom",
       levelName: base.name,
       styleName: P.name,
       styleBlurb: P.blurb,
@@ -182,19 +190,35 @@
     };
   }
 
-  /** opts.omniscient：上帝視角餵給電腦；opts.style：個性鍵（見 AI_PERSONAS） */
+  /**
+   * 深度 1：只看這一步。opts.omniscient：上帝視角餵給電腦；opts.style：個性鍵（見 AI_PERSONAS）。
+   * level 是設定物件且 depth > 1 時交給 ai-search.js 推演。
+   */
   function chooseMove(S, side, rng = Math.random, level = "hardest", opts = {}) {
+    if (level && typeof level === "object" && level.depth > 1 && LZ.aiSearch) {
+      return LZ.aiSearch(S, side, rng, level, opts).pick;
+    }
+    const style = (level && typeof level === "object" && level.style) || opts.style || "balanced";
+    return scoreMoves(S, side, rng, resolveBrain(S.V, level, style), opts);
+  }
+
+  /**
+   * 替 side 的每一手打分數，回傳最高分的一手 {from, mv, score}。
+   * opts.out：給陣列時，把每一手 {from, mv, score} 依產生順序放進去（推演用）。
+   * 上帝視角只在這次呼叫內有效，推演時換對方的視角不會被污染。
+   */
+  function scoreMoves(S, side, rng, L, opts = {}) {
+    const prev = omniscient;
     omniscient = !!opts.omniscient;
     try {
-      return chooseMoveInner(S, side, rng, level, opts.style || "balanced");
+      return scoreMovesInner(S, side, rng, L, opts.out || null);
     } finally {
-      omniscient = false;
+      omniscient = prev;
     }
   }
 
-  function chooseMoveInner(S, side, rng, level, style) {
+  function scoreMovesInner(S, side, rng, L, out) {
     const V = S.V, B = S.board;
-    const L = resolveBrain(V, level, style);
     const enemies = [];
     let flagHolders = 0;
     const flagIdx = V.kindIdx.flag;
@@ -221,10 +245,21 @@
     // 每顆敵棋在目前盤面的威脅範圍；假設走法只動到 from/to，沒碰到的就沿用
     const baseReach = new Map();
     for (const e of enemies) baseReach.set(e, threatReach(S, e, B[e], side));
+    // changed 一律是 [from, to]（我方棋從 from 走到 to 的假想盤面），同一組 from/to 的盤面完全相同，
+    // 所以重算的結果記起來給同一個候選手的其他評估共用（結果不變，只是不重算）
+    let memoKey = -1;
+    const memo = new Map();
     const reachOf = (e, changed) => {
       const b = baseReach.get(e);
       if (!changed) return b;
-      for (const c of changed) if (b.touched.has(c)) return threatReach(S, e, B[e], side);
+      for (const c of changed) {
+        if (!b.touched.has(c)) continue;
+        const key = changed[0] * B.length + changed[1];
+        if (key !== memoKey) { memoKey = key; memo.clear(); }
+        let r = memo.get(e);
+        if (!r) { r = threatReach(S, e, B[e], side); memo.set(e, r); }
+        return r;
+      }
       return b;
     };
 
@@ -420,7 +455,8 @@
         }
         // 軍旗已被威脅時，偵察不能解圍；移動的情況已由 threatAfter 處理
         if (threatenedNow && mv.kind === "scout") score -= FLAG_DANGER * L.flag;
-        if (score > bestScore) { bestScore = score; best = { from, mv }; }
+        if (out) out.push({ from, mv, score });
+        if (score > bestScore) { bestScore = score; best = { from, mv, score }; }
       }
     }
     return best;
@@ -439,7 +475,10 @@
     AI_LEVELS: LEVELS,
     AI_PERSONAS: PERSONAS,
     aiResolveBrain: resolveBrain,
+    aiLevelParams: levelParams,
+    aiScoreMoves: scoreMoves,
     aiChooseMove: chooseMove,
+    AI_FLAG_VALUE: FLAG_VALUE,
     aiTurn,
   });
 })(typeof window !== "undefined" ? window : globalThis);
