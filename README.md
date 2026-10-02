@@ -1,10 +1,10 @@
 ﻿# 陸軍棋（網頁版）
 
-可商用 · 改作須同樣開源分享 · 請保留著名／著作權聲明  
-授權：**[GPL-3.0](LICENSE)**（對應：Commercial OK / ShareAlike-style copyleft / Attribution）
+**授權：[CC BY-SA 4.0](LICENSE)** — 可商用 · 署名 · 可分享 · 改作須同樣分享  
+說明見 [LICENSE說明.md](LICENSE說明.md)
 
-線上玩（開 GitHub Pages 後）：https://chenborong16.github.io/luzhanqi/
-
+- 倉庫：https://github.com/chenBoRong16/luzhanqi  
+- 線上玩：https://chenborong16.github.io/luzhanqi/
 
 雙擊 `play.cmd`（或直接開 `index.html`）選版本。不需要架伺服器，也不需要網路。
 
@@ -101,3 +101,4 @@ node tests/levels.js 120                   # 各難度相鄰兩級對打
 node tests/tune-hardest.js 120             # 擴充版「最難」調參
 node tests/search-layout.js 擴充版-0 20 80  # 最強佈局搜尋（每版約 15 分鐘）
 ```
+
