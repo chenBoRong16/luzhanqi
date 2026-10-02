@@ -19,6 +19,7 @@
       illegal: st.illegal,
       cheatUsed: !!st.cheatUsed,
       grids: st.grids,
+      map: st.map || undefined, // 擴充版：整張地圖存進棋譜，換台電腦也能複盤
       moves: S.rec.slice(),
       result: S.phase === "end" ? { winner: S.winner, reason: S.endReason } : null,
     };
@@ -31,6 +32,12 @@
     if (d.variant !== V.key) return { error: `這是「${d.variant}」的棋譜，不是本版的` };
     if (!Array.isArray(d.grids) || d.grids.length !== 2 || !Array.isArray(d.moves)) return { error: "棋譜內容不完整" };
     return { rec: d };
+  }
+
+  /** 依棋譜的規則組與地圖建出複盤用的 variant（原版直接用目前的） */
+  function variantForRecord(rec) {
+    if (!LZ.CONFIG || !LZ.CONFIG.ruleDefs) return LZ.VARIANT;
+    return LZ.buildVariant(LZ.CONFIG, rec.rules || undefined, rec.map || undefined);
   }
 
   /** 能看的步驟（略過「跳過回合」，那是重播時自動產生的） */
@@ -85,5 +92,5 @@
     return `${verb}：${pos(e.f)} → ${pos(e.t)}`;
   }
 
-  Object.assign(LZ, { RECORD_FORMAT, buildRecord, parseRecord, replayTo, recordSteps: steps, describeStep: describe });
+  Object.assign(LZ, { RECORD_FORMAT, buildRecord, parseRecord, replayTo, variantForRecord, recordSteps: steps, describeStep: describe });
 })(typeof window !== "undefined" ? window : globalThis);

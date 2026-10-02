@@ -3,15 +3,13 @@
   "use strict";
   const LZ = root.LZ;
 
-  // 盤面座標（SVG viewBox 單位）
-  const CW = 100, RH = 60, RIVER = 96;
   const ACTION_LABEL = { attack: "攻擊", scout: "偵察", move: "移動", drop: "空降", snipe: "狙擊", blow: "炸橋" };
 
   // 重新掛載（例如切換規則組）時保留的介面設定
   const persist = {
     level: { me: "hardest", foe: "hardest" },
     style: { me: "balanced", foe: "balanced" },
-    speed: 500, hints: true, first: 0, suggest: false,
+    speed: 500, hints: true, first: 0, suggest: false, replaySfx: false,
     cheat: null, pending: null,
   };
 
@@ -31,19 +29,35 @@
     unmountPrev = () => ac.abort();
     const on = (target, type, fn) => target.addEventListener(type, fn, { signal: ac.signal });
 
-    // 擴充版：讀取上次的規則組並重建 variant
+    // 擴充版：讀取上次的規則組與地圖，重建 variant
     const CFG = LZ.CONFIG || null;
     const hasRules = !!(CFG && CFG.ruleDefs && CFG.ruleDefs.length);
+    const hasMaps = hasRules && !!LZ.builtinMaps;
     const RULES_KEY = CFG ? `lzq-${CFG.key}-rules` : null;
-    if (hasRules) LZ.VARIANT = LZ.buildVariant(CFG, storage(RULES_KEY) || undefined);
+    const MAP_KEY = CFG ? `lzq-${CFG.key}-map` : null;
+    const MAPS_KEY = CFG ? `lzq-${CFG.key}-maps` : null;
+    const LEVEL = CFG && CFG.level != null ? CFG.level : 0;
+    /** 可選的地圖：內建範例＋存在瀏覽器裡的自訂地圖 */
+    function allMaps() {
+      if (!hasMaps) return [];
+      const builtin = LZ.builtinMaps(LEVEL, CFG.key).map((m) => Object.assign(m, { builtin: true }));
+      const saved = (storage(MAPS_KEY) || []).filter((m) => m && m.format === LZ.MAP_FORMAT);
+      return builtin.concat(saved);
+    }
+    function findMap(hash) { return allMaps().find((m) => LZ.mapHash(m) === hash) || null; }
+    function saveUserMap(map) {
+      const list = (storage(MAPS_KEY) || []).filter((m) => LZ.mapHash(m) !== LZ.mapHash(map));
+      list.push(map);
+      storage(MAPS_KEY, list);
+    }
+    let MAP = null;
+    if (hasMaps) {
+      const want = storage(MAP_KEY);
+      MAP = (want && findMap(want.hash)) || allMaps()[0];
+    }
+    if (hasRules) LZ.VARIANT = LZ.buildVariant(CFG, storage(RULES_KEY) || undefined, MAP || undefined);
     const V = LZ.VARIANT;
-    const W = V.cols * CW;
-    const H = 2 * V.rows * RH + RIVER;
-    const px = (n) => CW / 2 + V.nodes[n].gx * CW;
-    const py = (n) => {
-      const gy = V.nodes[n].gy;
-      return RH / 2 + gy * RH + (gy >= V.rows ? RIVER : 0);
-    };
+    const { W, H, px, py } = LZ.boardGeom(V);
     const STORE_KEY = `lzq-${V.key}-my-layout`;
     const rulesHtml = typeof V.rulesHtml === "function" ? V.rulesHtml(V) : V.rulesHtml;
 
@@ -71,6 +85,7 @@
         <a class="back" href="../index.html">← 選版本</a>
         <h1>${V.title}</h1>
         <button type="button" class="ghost" data-act="music" title="背景音樂開關">${(LZ.audio && !LZ.audio.isMusicOn()) ? "音樂：關" : "音樂：開"}</button>
+        <button type="button" class="ghost" data-act="volume" title="音效、音樂音量">音量</button>
         <button type="button" class="ghost" data-act="mute" title="音效總開關">${(LZ.audio && LZ.audio.isMuted()) ? "聲音：關" : "聲音：開"}</button>
         <button type="button" class="ghost" data-act="rules">規則</button>
       </header>
@@ -86,6 +101,20 @@
           <div class="card status-card"></div>
           <div class="card replay-card"></div>
           <div class="card stats-card" hidden></div>
+          ${hasMaps ? `<details class="card map-card"${V.mapHash !== LZ.standardHash(V) ? " open" : ""}>
+            <summary>地圖：${MAP.name}${LZ.isSymmetric(MAP) ? "" : "（不對稱）"}</summary>
+            <p class="muted">${MAP.desc || ""}　${V.cols}×${V.rows}</p>
+            <div class="row wrap">
+              <select data-act="mapSelect">${allMaps().map((m) => `<option value="${LZ.mapHash(m)}"${LZ.mapHash(m) === V.mapHash ? " selected" : ""}>${m.builtin ? "" : "★ "}${m.name}（${m.cols}×${m.rows}）</option>`).join("")}</select>
+            </div>
+            <div class="row wrap">
+              <button type="button" class="small" data-act="importMap">匯入地圖</button>
+              <button type="button" class="small" data-act="exportMap">匯出地圖</button>
+              <a class="small-link" href="../地圖編輯器/index.html?v=${CFG.key}">開啟地圖編輯器 →</a>
+            </div>
+            ${LZ.terrainLegendHtml(V)}
+            <p class="muted">換地圖會重新開局；開戰後鎖定。</p>
+          </details>` : ""}
           ${ruleCard}
           <div class="card">
             <div class="card-title">標記敵棋</div>
@@ -200,76 +229,8 @@
     $('[data-act="hints"]').checked = ui.hints;
     $('[data-act="suggestToggle"]').checked = ui.suggestOn;
 
-    drawLines();
+    elSvg.innerHTML = LZ.drawBoard(V);
     const cellEls = buildCells();
-
-    // ---------- 盤面線條（只畫一次；斷橋在 render 時切換） ----------
-    function drawLines() {
-      const parts = [];
-      const half = (side) => {
-        const y0 = side === 1 ? 0 : V.rows * RH + RIVER;
-        return `<rect class="half h${side}" x="4" y="${y0 + 4}" width="${W - 8}" height="${V.rows * RH - 8}" rx="10"/>`;
-      };
-      parts.push(half(0), half(1));
-      // 河界與山
-      const ry = V.rows * RH;
-      parts.push(`<rect class="river" x="0" y="${ry}" width="${W}" height="${RIVER}"/>`);
-      for (let c = 0; c < V.cols; c++) {
-        const x = CW / 2 + c * CW;
-        if (!V.railCross.includes(c) && !(V.roadCross || []).includes(c)) {
-          const b = ry + RIVER - 18, t = ry + 20;
-          parts.push(`<path class="mtn" d="M${x - 34} ${b} L${x - 10} ${t + 8} L${x} ${t + 18} L${x + 12} ${t} L${x + 34} ${b} Z"/>`);
-        }
-      }
-      // 地形底色（森林、碉堡）畫在公路下面
-      for (const nd of V.nodes) {
-        const x = px(nd.id), y = py(nd.id);
-        if (nd.forest) {
-          parts.push(`<rect class="forest" x="${x - 46}" y="${y - 27}" width="92" height="54" rx="14"/>`);
-          for (const dx of [-30, 30]) parts.push(`<path class="tree" d="M${x + dx} ${y - 20} l9 15 h-5 l7 12 h-22 l7 -12 h-5 z"/>`);
-        }
-      }
-      // 公路
-      const seen = new Set();
-      for (let a = 0; a < V.nNodes; a++) {
-        for (const b of V.adj[a]) {
-          const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const cross = V.nodes[a].side !== V.nodes[b].side;
-          if (cross && V.railCross.includes(V.nodes[a].col)) continue;
-          if (cross) {
-            const x = px(a), col = V.nodes[a].col;
-            parts.push(`<g class="bridge-g" data-bridge="${col}">
-              <line class="bridge" x1="${x}" y1="${py(a)}" x2="${x}" y2="${py(b)}"/>
-              <rect class="bridge-deck" x="${x - 14}" y="${ry + 10}" width="28" height="${RIVER - 20}" rx="3"/>
-              <text class="river-label" x="${x}" y="${ry + RIVER / 2 + 4}">橋</text>
-              <path class="bridge-x" d="M${x - 20} ${ry + 18} L${x + 20} ${ry + RIVER - 18} M${x + 20} ${ry + 18} L${x - 20} ${ry + RIVER - 18}"/>
-            </g>`);
-          } else {
-            parts.push(`<line class="road" x1="${px(a)}" y1="${py(a)}" x2="${px(b)}" y2="${py(b)}"/>`);
-          }
-        }
-      }
-      // 鐵路
-      for (const L of V.lines) {
-        const d = L.map((n, i) => `${i ? "L" : "M"}${px(n)} ${py(n)}`).join(" ");
-        parts.push(`<path class="rail-bed" d="${d}"/><path class="rail-tie" d="${d}"/>`);
-      }
-      // 站點
-      for (const nd of V.nodes) {
-        const x = px(nd.id), y = py(nd.id);
-        if (nd.camp) parts.push(`<circle class="camp" cx="${x}" cy="${y}" r="27"/>`);
-        else if (nd.hq) parts.push(`<rect class="hq" x="${x - 42}" y="${y - 25}" width="84" height="50" rx="22"/>`);
-        else parts.push(`<rect class="post" x="${x - 34}" y="${y - 19}" width="68" height="38" rx="5"/>`);
-        if (nd.bunker) {
-          parts.push(`<rect class="bunker" x="${x - 44}" y="${y - 26}" width="88" height="52" rx="3"/>`);
-          for (const dx of [-36, -12, 12, 36]) parts.push(`<rect class="bunker-tooth" x="${x + dx - 5}" y="${y - 31}" width="10" height="7"/>`);
-        }
-      }
-      parts.push(`<text class="river-title" x="${W / 2}" y="${ry + RIVER / 2 + 6}">${V.key === "classic" ? "山 界" : ""}</text>`);
-      elSvg.innerHTML = parts.join("");
-    }
 
     function buildCells() {
       const els = [];
@@ -280,7 +241,9 @@
         b.style.left = (px(nd.id) / W) * 100 + "%";
         b.style.top = (py(nd.id) / H) * 100 + "%";
         b.dataset.n = nd.id;
-        const extra = (nd.camp ? " 行營" : "") + (nd.hq ? " 大本營" : "") + (nd.forest ? " 森林" : "") + (nd.bunker ? " 碉堡" : "");
+        const extra = (nd.camp ? " 行營" : "") + (nd.hq ? " 大本營" : "") + (nd.forest ? " 森林" : "") + (nd.bunker ? " 碉堡" : "")
+          + (nd.swamp ? " 沼澤" : "") + (nd.plain ? " 平原" : "") + (nd.village ? " 村莊" : "") + (nd.mountain ? " 高山" : "")
+          + (nd.gaugeBreak ? " 換軌站" : "");
         b.setAttribute("aria-label", `${nd.side === 0 ? "下方" : "上方"} 第${nd.row + 1}列 第${nd.col + 1}欄${extra}`);
         elCells.appendChild(b);
         els.push(b);
@@ -293,9 +256,9 @@
       const raw = storage(STORE_KEY);
       if (raw) {
         const parsed = LZ.parseFile(V, JSON.stringify(raw));
-        if (!parsed.error && !parsed.rulesMismatch && !LZ.validateGrid(V, parsed.grid)) return parsed.grid;
+        if (!parsed.error && !parsed.rulesMismatch && !parsed.mapMismatch && !LZ.validateGrid(V, parsed.grid, true, false, S ? S.human : 0)) return parsed.grid;
       }
-      return LZ.defaultGrid(V);
+      return LZ.defaultGrid(V, 0);
     }
     function saveMyGrid(grid) {
       storage(STORE_KEY, LZ.buildFile(V, "上次佈局", grid));
@@ -309,8 +272,9 @@
       S = LZ.newGame(V);
       if (keep) { Object.assign(S.cheat, keep); S.cheat.used = false; }
       LZ.setSideGrid(S, S.human, myGrid || loadMyGrid());
-      LZ.setSideGrid(S, 1 - S.human, foeGrid || LZ.randomGrid(V));
+      LZ.setSideGrid(S, 1 - S.human, foeGrid || LZ.randomGrid(V, Math.random, 1 - S.human));
       S.log.push("佈陣：點兩顆己方棋互換位置（也可以拖曳），好了按「開始對戰」");
+      if (LZ.audio && LZ.audio.setScene) LZ.audio.setScene("deploy");
       ui.sel = null; ui.legal = [];
       render();
     }
@@ -327,7 +291,7 @@
     }
 
     function afterMove(ev, prevPhase) {
-      if (LZ.audio && ev) LZ.audio.playEvent(ev);
+      if (LZ.audio && ev) LZ.audio.playEvent(ev, S.human);
       if (LZ.audio && prevPhase === "play" && S.phase === "end") {
         LZ.audio.playOutcome(S.winner, S.human);
       }
@@ -545,10 +509,10 @@
       const na = V.nodes[a], nb = V.nodes[b];
       if (!pa || nb.side !== S.human) return "不能放那裡";
       if (S.cheat.ignorePlacement) return null;
-      const e1 = LZ.placementError(V, V.types[pa.t], nb.col, nb.row);
+      const e1 = LZ.placementError(V, V.types[pa.t], nb.col, nb.row, nb.side);
       if (e1) return `${V.types[pa.t].name}：${e1}`;
       if (pb) {
-        const e2 = LZ.placementError(V, V.types[pb.t], na.col, na.row);
+        const e2 = LZ.placementError(V, V.types[pb.t], na.col, na.row, na.side);
         if (e2) return `${V.types[pb.t].name}：${e2}`;
       }
       return null;
@@ -681,7 +645,7 @@
       if (!ui.replay && S.phase === "deploy" && ui.sel != null) {
         deployOk = new Set();
         for (const nd of V.nodes) {
-          if (nd.side === S.human && nd.id !== ui.sel && (S.cheat.ignorePlacement || !nd.camp) && !deployError(ui.sel, nd.id)) deployOk.add(nd.id);
+          if (nd.side === S.human && nd.id !== ui.sel && !nd.mountain && (S.cheat.ignorePlacement || !nd.camp) && !deployError(ui.sel, nd.id)) deployOk.add(nd.id);
         }
       }
       const lm = X.lastMove;
@@ -783,7 +747,7 @@
         html = `<div class="phase">複盤中</div>${quietTrack(X)}
           <p class="muted">${X.phase === "end" ? X.endReason : ""}</p>`;
       } else if (S.phase === "deploy") {
-        const space = V.cols * V.rows - V.camps.length;
+        const space = V.nodes.filter((n) => n.side === S.human && !n.camp && !n.mountain).length;
         html = `<div class="phase">佈陣</div>
           <p>點一顆己方棋，再點另一顆己方棋（或亮起的空格）交換；也可以直接拖曳。${V.armySize < space ? `本版 ${space} 格放 ${V.armySize} 顆，有空格可用。` : ""}</p>
           ${S.cheat.ignorePlacement ? `<p class="flash">無視佈局條件：開著（佈陣規則不檢查）</p>` : ""}
@@ -866,7 +830,8 @@
       const rows = [
         ["空降", "drop"], ["偵察", "scout"], ["坦克兩格", "tank2"], ["狙擊（命中）", "snipe"], ["炸橋", "blow"],
         ["進入森林", "forest"], ["雷達揭露", "radar"], ["碉堡防守", "bunkerDef"],
-      ].filter(([, k]) => (st[k][0] + st[k][1]) > 0);
+        ["進入沼澤", "swamp"], ["進入村莊", "village"], ["坦克平原 3 格", "tank3"], ["窄軌行駛", "narrow"], ["換軌站停下", "gaugeStop"],
+      ].filter(([, k]) => st[k] && (st[k][0] + st[k][1]) > 0);
       elStats.innerHTML = `<div class="card-title">統計</div>
         <div><b class="me-c">我方擊殺</b> ${kills(me)}</div>
         <div><b class="foe-c">敵方擊殺</b> ${kills(1 - me)}</div>
@@ -893,6 +858,8 @@
           el.disabled = locked || (d.piece && !V.rule.newArmy);
         }
         for (const el of app.querySelectorAll('[data-act="rulesAll"],[data-act="rulesLegacy"]')) el.disabled = locked;
+        const ms = app.querySelector('[data-act="mapSelect"]');
+        if (ms) ms.disabled = locked;
       }
       for (const b of app.querySelectorAll("[data-lv]")) {
         const [who, lv] = b.dataset.lv.split(":");
@@ -945,8 +912,20 @@
     function replayGo(k) {
       const R = ui.replay;
       if (!R) return;
+      const prevK = R.k;
       R.k = Math.max(0, Math.min(R.total, k));
-      R.S = LZ.replayTo(V, R.rec, R.k);
+      // 往後一步且開了「複盤播放事件音效」：重播到前一步再走這一步，取得事件來發聲；否則只出輕提示音
+      const step = LZ.recordSteps(R.rec)[R.k - 1];
+      if (persist.replaySfx && R.k === prevK + 1 && step && !step.c && LZ.audio) {
+        const X = LZ.replayTo(V, R.rec, R.k - 1);
+        X.cheat.infinite = !!step.inf;
+        const ev = LZ.applyMove(X, step.f, { to: step.t, kind: step.k });
+        LZ.audio.playEvent(ev, R.rec.human);
+        R.S = LZ.replayTo(V, R.rec, R.k);
+      } else {
+        R.S = LZ.replayTo(V, R.rec, R.k);
+        if (R.k !== prevK && LZ.audio) LZ.audio.tick();
+      }
       render();
     }
     function closeReplay() {
@@ -963,6 +942,15 @@
     on(elReplay, "input", (e) => {
       if (e.target.dataset.act === "rpSlider") replayGo(Number(e.target.value));
     });
+
+    // ---------- 地圖 ----------
+    function switchMap(map, pending) {
+      if (!map.builtin && !findMap(LZ.mapHash(map))) saveUserMap(map);
+      storage(MAP_KEY, { name: map.name, hash: LZ.mapHash(map) });
+      persist.cheat = Object.assign({}, S.cheat);
+      persist.pending = pending || null;
+      mountApp(app);
+    }
 
     // ---------- 規則組 ----------
     function switchRules(rules, pending) {
@@ -1003,6 +991,7 @@
       ui.flash = "";
       switch (act) {
         case "rules": return openRules();
+        case "volume": return openVolume();
         case "mute":
           if (LZ.audio) {
             LZ.audio.unlock();
@@ -1019,11 +1008,11 @@
           return render();
         case "start": return startBattle();
         case "random":
-          LZ.setSideGrid(S, S.human, LZ.randomGrid(V));
+          LZ.setSideGrid(S, S.human, LZ.randomGrid(V, Math.random, S.human));
           ui.sel = null;
           return render();
         case "default":
-          LZ.setSideGrid(S, S.human, LZ.defaultGrid(V));
+          LZ.setSideGrid(S, S.human, LZ.defaultGrid(V, S.human));
           ui.sel = null;
           return render();
         case "export": return openExport();
@@ -1081,13 +1070,19 @@
           return render();
         }
         case "rerollFoe":
-          LZ.setSideGrid(S, 1 - S.human, LZ.randomGrid(V));
+          LZ.setSideGrid(S, 1 - S.human, LZ.randomGrid(V, Math.random, 1 - S.human));
           S.log.push("【作弊】電腦換了一個隨機佈局");
           return render();
         case "replay": return openReplay(LZ.buildRecord(S, "這盤"));
         case "replayExit": return closeReplay();
         case "exportRec": return openExportRecord();
         case "importRec": return openImportRecord();
+        case "importMap": return openImportMap();
+        case "exportMap":
+          return textModal({
+            title: "匯出地圖", note: "地圖檔可以在地圖編輯器裡打開修改，也可以分享給別人匯入。",
+            name: MAP.name, build: (name) => LZ.mapToJson(Object.assign(LZ.cloneMap(MAP), { name, builtin: undefined, desc: undefined })),
+          });
         case "rulesAll": return switchRules({});
         case "rulesLegacy": return switchRules(LZ.legacyRules(V));
       }
@@ -1103,6 +1098,7 @@
           drag: "拖曳搬動", swap: "交換兩邊棋盤", ignorePlacement: "無視佈局條件", undo: "悔棋",
         };
         S.log.push(`【作弊】${names[k]}：${el.checked ? "開" : "關"}`);
+        if (LZ.audio) LZ.audio.tick();
         if (k === "infinite") {
           if (el.checked) ui.watch = false;
           if (el.checked && S.phase === "play") { clearTimeout(ui.aiTimer); S.turn = S.human; }
@@ -1117,6 +1113,10 @@
         return switchRules(rules);
       }
       const act = el.dataset.act;
+      if (act === "mapSelect") {
+        const m = findMap(el.value);
+        if (m) return switchMap(m);
+      }
       if (act === "hints") { ui.hints = persist.hints = el.checked; render(); }
       if (act === "suggestToggle") { ui.suggestOn = persist.suggest = el.checked; ui.suggestKey = ""; render(); }
       if (act === "editType") { ui.editType = Number(el.value); }
@@ -1133,8 +1133,28 @@
     on(elModalBack, "click", (e) => { if (e.target === elModalBack) closeModal(); });
     on(elModal, "click", (e) => { if (e.target.closest("[data-close]")) closeModal(); });
 
+    function openVolume() {
+      const v = LZ.audio ? LZ.audio.getVolume() : { sfx: 0.8, music: 0.6 };
+      openModal(`<h2>音量</h2>
+        <label class="field">音效 <input type="range" min="0" max="1" step="0.05" value="${v.sfx}" data-vol="sfx"></label>
+        <label class="field">音樂 <input type="range" min="0" max="1" step="0.05" value="${v.music}" data-vol="music"></label>
+        <label class="check"><input type="checkbox" data-f="replaySfx"${persist.replaySfx ? " checked" : ""}> 複盤往後一步時播放事件音效（預設只有輕提示音）</label>
+        <p class="muted">音效只依你在實體棋盤上也會知道的事發聲：撞到地雷和輸給大棋是同一個聲音。觀戰「快」時每秒最多 3 個音效。</p>
+        <div class="row end"><button type="button" class="primary" data-close>關閉</button></div>`);
+      for (const el of elModal.querySelectorAll("[data-vol]")) {
+        el.addEventListener("input", () => {
+          if (!LZ.audio) return;
+          LZ.audio.unlock();
+          LZ.audio.setVolume(el.dataset.vol, el.value);
+          if (el.dataset.vol === "sfx") LZ.audio.tick();
+        });
+      }
+      elModal.querySelector('[data-f="replaySfx"]').addEventListener("change", (e) => { persist.replaySfx = e.target.checked; });
+    }
+
     function openRules() {
       openModal(`<h2>規則</h2><div class="rules">${rulesHtml}
+        ${hasMaps && LZ.terrainLegend(V).length ? `<h3>這張地圖的地形（${MAP.name}）</h3>${LZ.terrainLegendHtml(V)}` : ""}
         <h3>操作</h3><ul>
         <li>點己方棋 → 點亮起的格子。綠點＝移動，紅框＝攻擊；空降、偵察、狙擊、炸橋各有標示。同一格有多種動作時會跳出選單。</li>
         <li>點敵棋或按右鍵可以標記你猜的棋種。「自動推測」會在棋上用小字列出依據對撞結果、移動方式推得的範圍（例：「旅↑」＝旅長以上）。</li>
@@ -1196,7 +1216,7 @@
         extra: `<label class="check"><input type="checkbox" data-f-opt="both"> 連同電腦的佈局一起匯出（會看到電腦怎麼擺）</label>`,
         build: (name) => {
           const both = elModal.querySelector('[data-f-opt="both"]').checked;
-          const illegal = !!LZ.validateGrid(V, myGrid) || (both && !!LZ.validateGrid(V, foeGrid));
+          const illegal = !!LZ.validateGrid(V, myGrid, true, false, S.human) || (both && !!LZ.validateGrid(V, foeGrid, true, false, 1 - S.human));
           return LZ.prettyLayout(LZ.buildFile(V, name, myGrid, both ? foeGrid : null, { illegal }));
         },
       });
@@ -1243,6 +1263,36 @@
       });
     }
 
+    /** 地圖不同時：有這張地圖就一鍵切換；沒有就請使用者先匯入（棋譜自帶地圖時直接用） */
+    function offerMapSwitch(fMsg, want, embedded, pending) {
+      const map = embedded || findMap(want.hash);
+      if (!map) {
+        fMsg.innerHTML = `這個檔案用的是地圖「${want.name}」，這台電腦上還沒有。請先在「地圖」卡片匯入那張地圖。`;
+        return;
+      }
+      fMsg.innerHTML = `這個檔案用的是地圖「${map.name}」，和目前不同。<br><button type="button" class="small" data-do="switchMap">切換到「${map.name}」並套用</button>`;
+      fMsg.querySelector('[data-do="switchMap"]').addEventListener("click", () => {
+        closeModal();
+        switchMap(map, pending);
+      });
+    }
+
+    function openImportMap() {
+      readerModal({
+        title: "匯入地圖",
+        note: "選地圖 .json 檔，或把內容貼在下面。會先檢查能不能玩，通過才存進瀏覽器並切換過去。",
+        placeholder: "或貼上地圖 JSON",
+        apply: (text, fMsg) => {
+          const parsed = LZ.parseMap(text);
+          if (parsed.error) { fMsg.textContent = parsed.error; return; }
+          const errs = LZ.validateMap(parsed.map, CFG, LEVEL);
+          if (errs.length) { fMsg.textContent = "這張地圖不能玩：" + errs.map((x) => x.msg).join("；"); return; }
+          closeModal();
+          switchMap(Object.assign(parsed.map, { variant: CFG.key }));
+        },
+      });
+    }
+
     function openImport(target, preset) {
       const foe = target === "foe";
       readerModal({
@@ -1265,16 +1315,17 @@
       const parsed = LZ.parseFile(V, text);
       if (parsed.error) { fMsg.textContent = parsed.error; return; }
       if (parsed.rulesMismatch) return offerRuleSwitch(fMsg, parsed.rules, { kind: "layout", text, foe, both });
+      if (parsed.mapMismatch) return offerMapSwitch(fMsg, parsed.map, null, { kind: "layout", text, foe, both });
       const loose = !!S.cheat.ignorePlacement;
-      const check = (g) => LZ.validateGrid(V, g, true, loose);
-      const err = check(parsed.grid);
+      const check = (g, side) => LZ.validateGrid(V, g, true, loose, side);
+      const err = check(parsed.grid, foe ? 1 - S.human : S.human);
       if (err) {
         fMsg.textContent = `${err}。這是違規佈局，要先在作弊選單開啟「無視佈局條件」才能載入`;
         return;
       }
       let foeGrid = null;
       if (parsed.enemyGrid && both) {
-        const e2 = check(parsed.enemyGrid);
+        const e2 = check(parsed.enemyGrid, 1 - S.human);
         if (e2) { fMsg.textContent = "電腦的佈局：" + e2; return; }
         foeGrid = parsed.enemyGrid;
       }
@@ -1287,7 +1338,7 @@
         S.log.push(`【作弊】敵方套用佈局「${parsed.name || "未命名"}」`);
       } else {
         newMatch(parsed.grid, foeGrid || (keep ? curFoe : null));
-        S.log.push(`已匯入佈局「${parsed.name || "未命名"}」${foeGrid ? "（含電腦的佈局）" : ""}${LZ.validateGrid(V, parsed.grid) ? "（違規佈局）" : ""}`);
+        S.log.push(`已匯入佈局「${parsed.name || "未命名"}」${foeGrid ? "（含電腦的佈局）" : ""}${LZ.validateGrid(V, parsed.grid, true, false, S.human) ? "（違規佈局）" : ""}`);
       }
       closeModal();
       render();
@@ -1313,10 +1364,14 @@
       if (hasRules && !LZ.sameRules(V, rec.rules || {})) {
         return offerRuleSwitch(fMsg, rec.rules || {}, { kind: "record", text });
       }
+      if (hasMaps && rec.map && LZ.mapHash(rec.map) !== V.mapHash) {
+        return offerMapSwitch(fMsg, { name: rec.map.name, hash: LZ.mapHash(rec.map) }, rec.map, { kind: "record", text });
+      }
       closeModal();
       openReplay(rec);
     }
 
+    if (LZ.audio && LZ.audio.setTheme) LZ.audio.setTheme(MAP && MAP.music && MAP.music !== "default" ? MAP.music : V.key);
     newMatch();
     // 切換規則組之前要做的事（匯入佈局或棋譜）接著做
     const pending = persist.pending;

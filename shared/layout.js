@@ -28,6 +28,7 @@
       說明: `grid 每列 ${V.cols} 格，第一列是前線（靠中間），最後一列是大本營那排；空字串是空格（行營開局必須空著）。棋名可用繁體或簡體`,
     };
     if (V.ruleDefs && V.ruleDefs.length) obj.rules = Object.assign({}, V.rule);
+    if (V.map) obj.map = { name: V.map.name, hash: V.mapHash };
     if (opts.illegal) obj.illegal = true;
     obj.grid = gridToNames(V, myGrid);
     if (enemyGrid) obj.enemyGrid = gridToNames(V, enemyGrid);
@@ -99,6 +100,11 @@
       rules = data.rules && typeof data.rules === "object" ? data.rules : legacyRules(V);
       if (!sameRules(V, rules)) return { name: data.name || "", rules, illegal: !!data.illegal, rulesMismatch: true };
     }
+    // 地圖：檔案沒寫就是標準地圖；和目前不同時先回報，讓介面切換地圖後再讀一次
+    if (V.map) {
+      const want = data.map && data.map.hash ? data.map : { name: "標準", hash: standardHash(V) };
+      if (want.hash !== V.mapHash) return { name: data.name || "", rules, map: want, illegal: !!data.illegal, mapMismatch: true };
+    }
     let mine, enemy;
     if (data.grid) {
       mine = parseGrid(V, data.grid, "grid");
@@ -117,8 +123,8 @@
     return { name: data.name || "", rules, illegal: !!data.illegal, grid: mine.grid, enemyGrid: enemy ? enemy.grid : null };
   }
 
-  /** 檢查 grid 是否為合法開局；loose＝無視佈局條件（只要格式對就好） */
-  function validateGrid(V, grid, strictCount = true, loose = false) {
+  /** 檢查 grid 是否為合法開局；loose＝無視佈局條件（只要格式對就好）；side＝放在哪一方（不對稱地圖用） */
+  function validateGrid(V, grid, strictCount = true, loose = false, side = 0) {
     if (loose) return null;
     const counts = new Array(V.types.length).fill(0);
     for (let row = 0; row < V.rows; row++) {
@@ -126,7 +132,7 @@
         const t = grid[row][col];
         if (t < 0) continue;
         counts[t]++;
-        const err = LZ.placementError(V, V.types[t], col, row);
+        const err = LZ.placementError(V, V.types[t], col, row, side);
         if (err) return `${V.types[t].name}（第 ${row + 1} 列第 ${col + 1} 欄）：${err}`;
       }
     }
@@ -138,8 +144,23 @@
     return null;
   }
 
-  /** 預設佈局；舊兵力用舊佈局；目前規則組沒有的棋，格子留空 */
-  function defaultGrid(V) {
+  /** 這一版的標準地圖雜湊（舊檔沒寫地圖時，就是用標準地圖） */
+  function standardHash(V) {
+    if (!V.cfg || !LZ.mapFromConfig) return null;
+    if (!V.cfg._stdHash) V.cfg._stdHash = LZ.mapHash(LZ.mapFromConfig(V.cfg));
+    return V.cfg._stdHash;
+  }
+
+  /**
+   * 預設佈局；舊兵力用舊佈局；目前規則組沒有的棋，格子留空。
+   * 自訂地圖（不是標準地圖）沒有預設佈局：用固定種子產生一個合法的隨機佈局。
+   */
+  function defaultGrid(V, side = 0) {
+    if (V.map && V.mapHash !== standardHash(V)) {
+      let seed = 20261002;
+      const rng = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 4294967296; };
+      return randomGrid(V, rng, side);
+    }
     const src = V.ruleDefs && V.ruleDefs.length && !V.rule.newArmy ? V.defaultLayoutOld : V.defaultLayout;
     return src.map((line) => line.map((n) => {
       const t = nameToIdx(V, n);
@@ -149,23 +170,26 @@
 
   // ---------- 隨機佈局（電腦開局用） ----------
 
-  /** rng: () => [0,1) */
-  function randomGrid(V, rng = Math.random) {
+  /** rng: () => [0,1)；side：放在哪一方（不對稱地圖的大本營、地形可能不同） */
+  function randomGrid(V, rng = Math.random, side = 0) {
     const { cols, rows } = V;
     const grid = Array.from({ length: rows }, () => new Array(cols).fill(-1));
     const free = new Set();
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
-        if (!V.camps.some(([c, r]) => c === col && r === row)) free.add(row * cols + col);
+        const nd = V.nodes[V.id(side, col, row)];
+        if (!nd.camp && !nd.mountain) free.add(row * cols + col);
       }
     }
     const put = (t, cell) => { grid[Math.floor(cell / cols)][cell % cols] = t; free.delete(cell); };
-    const ok = (T, cell) => free.has(cell) && !LZ.placementError(V, T, cell % cols, Math.floor(cell / cols));
+    const ok = (T, cell) => free.has(cell) && !LZ.placementError(V, T, cell % cols, Math.floor(cell / cols), side);
+    const hqs = V.nodes.filter((n) => n.side === side && n.hq).map((n) => [n.col, n.row]);
     const byKind = (k) => V.types.find((T) => T.kind === k);
 
     // 1. 軍旗：隨機一個大本營
     const flag = byKind("flag");
-    const [fc, fr] = V.hqs[Math.floor(rng() * V.hqs.length)];
+    if (!hqs.length) throw new Error("沒有大本營");
+    const [fc, fr] = hqs[Math.floor(rng() * hqs.length)];
     put(flag.idx, fr * cols + fc);
 
     // 2. 地雷：先圍住軍旗（左右、前方），剩下隨機放在可放雷的位置
@@ -177,6 +201,7 @@
     }
     while (mines > 0) {
       const opts = [...free].filter((cell) => ok(mine, cell));
+      if (!opts.length) throw new Error("地雷放不下");
       put(mine.idx, opts[Math.floor(rng() * opts.length)]);
       mines--;
     }
@@ -192,9 +217,10 @@
         const opts = [...free].filter((cell) => ok(T, cell));
         let best = null, bestScore = -Infinity;
         for (const cell of opts) {
-          const s = prefer(V, T, cell % cols, Math.floor(cell / cols)) + rng() * 4;
+          const s = prefer(V, T, cell % cols, Math.floor(cell / cols), side) + rng() * 4;
           if (s > bestScore) { bestScore = s; best = cell; }
         }
+        if (best == null) throw new Error(`${T.name}放不下`);
         put(T.idx, best);
       }
     }
@@ -202,10 +228,10 @@
   }
 
   /** 各棋種偏好的位置（越大越想放） */
-  function prefer(V, T, col, row) {
+  function prefer(V, T, col, row, side = 0) {
     const depth = row / (V.rows - 1); // 0 前線 → 1 後排
     const center = 1 - Math.abs(col - (V.cols - 1) / 2) / ((V.cols - 1) / 2);
-    const isHQ = V.hqs.some(([c, r]) => c === col && r === row);
+    const isHQ = V.nodes[V.id(side, col, row)].hq;
     const onRail = V.railRows.includes(row) || V.railCols.includes(col);
     if (isHQ) return T.kind === "normal" && T.rank <= 3 ? 1 : -6; // 大本營的棋動不了，放小棋
     switch (T.kind) {
@@ -236,5 +262,5 @@
     return "{\n" + parts.join(",\n") + "\n}\n";
   }
 
-  Object.assign(LZ, { FORMAT, prettyLayout, nameToIdx, gridToNames, buildFile, parseFile, validateGrid, defaultGrid, randomGrid, legacyRules, sameRules });
+  Object.assign(LZ, { FORMAT, prettyLayout, nameToIdx, gridToNames, buildFile, parseFile, validateGrid, defaultGrid, randomGrid, legacyRules, sameRules, standardHash });
 })(typeof window !== "undefined" ? window : globalThis);

@@ -301,3 +301,55 @@ table.stats td:first-child, table.stats th:first-child { text-align: left; }
   border-radius: calc(var(--u) * 4); pointer-events: none; z-index: 2; white-space: nowrap;
 }
 .cell.sug-to { outline: calc(var(--u) * 3) dashed #2f7fd6; outline-offset: calc(var(--u) * 2); border-radius: calc(var(--u) * 8); }
+
+/* ---------- 地圖與新地形 ---------- */
+.lines .swamp { fill: #b9c9b0; stroke: #4f6b55; stroke-width: 2; }
+.lines .swamp-wave { fill: none; stroke: #3d5a45; stroke-width: 1.6; }
+.lines .plain { fill: #f1e6b8; stroke: #a58a3c; stroke-width: 1.5; stroke-dasharray: 6 4; }
+.lines .plain-dot { fill: #8a6d22; }
+.lines .village { fill: #ead9c6; stroke: #8b6a47; stroke-width: 2; }
+.lines .house { fill: #fff8ee; stroke: #6b4a2b; stroke-width: 1.8; }
+.lines .house-door { fill: #6b4a2b; }
+.lines .peak { fill: #8f8577; stroke: #4c443a; stroke-width: 2.5; }
+.lines .peak-snow { fill: #ffffff; stroke: #4c443a; stroke-width: 1; }
+/* 軌距：標準軌＝原樣；寬軌＝雙線；窄軌＝細、枕木密 */
+.lines .rail-bed.g-narrow { stroke-width: 5; }
+.lines .rail-tie.g-narrow { stroke-width: 2.5; stroke-dasharray: 4 4; }
+.lines .rail-bed.g-wide { stroke-width: 13; }
+.lines .rail-tie.g-wide { stroke-width: 7; stroke-dasharray: 10 6; }
+.lines .rail-wide-inner { fill: none; stroke: #3a2e1d; stroke-width: 2; }
+.lines .gauge-break { fill: none; stroke: #7a3fa0; stroke-width: 3.5; stroke-dasharray: 7 4; }
+
+.map-card summary { cursor: pointer; font-weight: 700; color: #c9a45a; }
+.map-card[open] summary { margin-bottom: 6px; }
+.map-card select { max-width: 100%; }
+.small-link { color: #8fb4e6; font-size: 13px; align-self: center; }
+ul.legend { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
+ul.legend li { margin: 3px 0; }
+
+/* 黑白列印：只印棋盤，地形靠圖示與花紋分辨（桌遊條件：地圖印得出來） */
+@media print {
+  body { background: #fff; color: #000; }
+  .topbar, .panel, .popover, .modal-back { display: none !important; }
+  .layout { display: block; padding: 0; }
+  .board { width: 100% !important; filter: grayscale(1); }
+  .cells { display: none; }
+}
+
+/* ---------- 地圖編輯器 ---------- */
+.board .edit-layer { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.edit-layer .ed-hit-cell { fill: transparent; cursor: crosshair; }
+.edit-layer .ed-hit-cell:hover { fill: rgba(217, 164, 65, .18); }
+.edit-layer .ed-hit-road { stroke: transparent; stroke-width: 22; cursor: pointer; }
+.edit-layer .ed-hit-road:hover { stroke: rgba(217, 164, 65, .45); }
+.edit-layer .ed-removed { stroke: #c0392b; stroke-width: 4; stroke-dasharray: 6 6; }
+.edit-layer .ed-bad { fill: rgba(192, 57, 43, .18); stroke: #c0392b; stroke-width: 3; pointer-events: none; }
+.edit-layer .ed-region { fill: rgba(47, 127, 214, .12); stroke: #2f7fd6; stroke-width: 3; stroke-dasharray: 8 5; pointer-events: none; }
+.edit-layer .ed-hit-cross { fill: rgba(255, 255, 255, .08); stroke: #d9a441; stroke-width: 2; stroke-dasharray: 5 4; cursor: pointer; }
+.edit-layer .ed-hit-cross:hover { fill: rgba(217, 164, 65, .3); }
+.edit-layer .ed-cross-label { fill: #1d1a12; font-size: 14px; text-anchor: middle; font-weight: 700; pointer-events: none; }
+.layout.editor .field.small input { width: 4em; }
+.tool-opts { margin-top: 8px; }
+.tool-opts .seg { margin-bottom: 4px; }
+.ok-c { color: #7fd38a; }
+.bad-c { color: #f08a7e; }

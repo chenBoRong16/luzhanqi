@@ -19,11 +19,16 @@
     return rule;
   }
 
-  /** 把 config 展開成引擎用的結構：節點、公路鄰接、鐵路線、棋種表 */
-  function buildVariant(cfg, rulesIn) {
+  /**
+   * 把 config 展開成引擎用的結構：節點、公路鄰接、鐵路線、棋種表。
+   * 擴充版一律走地圖（shared/map.js）：沒給地圖就用 config 換算的標準地圖，結果和舊建法逐項相同。
+   * 原版沒有規則表，繼續用下面的固定參數建法。
+   */
+  function buildVariant(cfg, rulesIn, map) {
+    const rule = resolveRules(cfg, rulesIn);
+    if ((cfg.ruleDefs || []).length && LZ.geometryFromMap) return buildFromMap(cfg, rule, map || LZ.mapFromConfig(cfg));
     const V = Object.assign({}, cfg);
     const { cols, rows } = cfg;
-    const rule = resolveRules(cfg, rulesIn);
     V.cfg = cfg;
     V.rule = rule;
     V.ruleDefs = cfg.ruleDefs || [];
@@ -115,7 +120,36 @@
       });
     });
     V.railAdj = railAdj.map((s) => [...s]);
+    buildTypes(V, cfg, rule);
+    return V;
+  }
 
+  /** 擴充版：從地圖建盤面 */
+  function buildFromMap(cfg, rule, map) {
+    const V = Object.assign({}, cfg);
+    const G = LZ.geometryFromMap(map, rule);
+    V.cfg = cfg;
+    V.rule = rule;
+    V.ruleDefs = cfg.ruleDefs || [];
+    V.map = map;
+    V.mapHash = LZ.mapHash(map);
+    V.cols = map.cols;
+    V.rows = map.rows;
+    V.half = V.cols * V.rows;
+    V.nNodes = 2 * V.half;
+    V.id = (side, col, row) => side * V.half + row * V.cols + col;
+    Object.assign(V, {
+      nodes: G.nodes, adj: G.adj, lines: G.lines, lineGauge: G.lineGauge, lineIndex: G.lineIndex,
+      railAdj: G.railAdj, railCross: G.railCross, roadCross: G.roadCross, railEdge: G.railEdge,
+    });
+    // 舊程式還會讀的清單（以我方半場為準）
+    V.camps = V.nodes.filter((n) => n.side === 0 && n.camp).map((n) => [n.col, n.row]);
+    V.hqs = V.nodes.filter((n) => n.side === 0 && n.hq).map((n) => [n.col, n.row]);
+    buildTypes(V, cfg, rule);
+    return V;
+  }
+
+  function buildTypes(V, cfg, rule) {
     // 棋種（依規則組過濾；舊兵力用 countOld）
     const oldArmy = V.ruleDefs.length > 0 && !rule.newArmy;
     const pieces = cfg.pieces
@@ -144,7 +178,6 @@
       const i = ladder.indexOf(T.rank);
       return i >= 0 && i + 1 < ladder.length ? ladder[i + 1] : T.rank + 1;
     });
-    return V;
   }
 
   /** 有比等級的棋（炸彈、地雷、軍旗、雷達站不比等級） */
@@ -154,12 +187,16 @@
 
   // ---------- 佈陣規則 ----------
 
-  /** 某棋種能否在開局放在 (col,row)（己方視角，row 0＝前線） */
-  function placementError(V, T, col, row) {
-    const local = row * V.cols + col;
-    const isCamp = V.camps.some(([c, r]) => r * V.cols + c === local);
-    const isHQ = V.hqs.some(([c, r]) => r * V.cols + c === local);
+  /** 某棋種能否在開局放在第 side 方的 (col,row)（row 0＝前線）；不對稱地圖要指定 side */
+  function placementError(V, T, col, row, side = 0) {
+    const nd = V.nodes[V.id(side, col, row)];
+    const isCamp = nd.camp;
+    const isHQ = nd.hq;
+    if (nd.mountain) return "高山不能放棋";
     if (isCamp) return "行營開局必須空著";
+    if (nd.swamp && (T.kind === "bomb" || T.kind === "mine" || T.kind === "flag" || T.kind === "radar")) {
+      return `沼澤不能放${T.name}`;
+    }
     if (T.kind === "flag" && !isHQ) return "軍旗必須放在大本營";
     if (T.kind === "mine" && row < V.rows - V.mineRows) return `地雷只能放最後 ${V.mineRows} 排`;
     if (T.kind === "bomb" && row === 0) return "炸彈不能放第一排";
@@ -168,10 +205,10 @@
   }
 
   /** 開局位置對對手透露的資訊：在 (col,row) 開局的棋可能是哪些棋種 */
-  function originMask(V, col, row) {
+  function originMask(V, col, row, side = 0) {
     let m = 0;
     for (const T of V.types) {
-      if (!placementError(V, T, col, row)) m |= 1 << T.idx;
+      if (!placementError(V, T, col, row, side)) m |= 1 << T.idx;
     }
     return m;
   }
@@ -226,6 +263,7 @@
     return {
       kills: [{}, {}], drop: pair(), scout: pair(), snipe: pair(), snipeHit: pair(), blow: pair(),
       bunkerDef: pair(), forest: pair(), radar: pair(), tank2: pair(),
+      swamp: pair(), village: pair(), tank3: pair(), narrow: pair(), gaugeStop: pair(),
     };
   }
 
@@ -256,6 +294,7 @@
       rec: [], // 棋譜
       recStart: null,
       stats: newStats(),
+      _fx: {},
     };
   }
 
@@ -303,7 +342,7 @@
         if (!p || p.side !== side) continue;
         const T = V.types[p.t];
         counts[p.t]++;
-        const err = placementError(V, T, col, row);
+        const err = placementError(V, T, col, row, side);
         if (err) return `${T.name}（第 ${row + 1} 列第 ${col + 1} 欄）：${err}`;
       }
     }
@@ -331,7 +370,7 @@
       const p = S.board[nd.id];
       if (!p) continue;
       // 違規佈局的一方，開局位置不透露任何資訊
-      p.cand[1 - p.side] = S.illegal[p.side] ? V.fullMask : originMask(V, nd.col, nd.row);
+      p.cand[1 - p.side] = S.illegal[p.side] ? V.fullMask : originMask(V, nd.col, nd.row, nd.side);
       p.cand[p.side] = 1 << p.t;
     }
     S.startGrids = [sideGrid(S, 0), sideGrid(S, 1)];
@@ -345,6 +384,7 @@
     S.stats = newStats();
     S.recStart = {
       first, human: S.human, rules: Object.assign({}, V.rule), illegal: S.illegal.slice(), cheatUsed: S.cheat.used,
+      map: V.map || null,
       grids: [namesGrid(S, S.startGrids[0]), namesGrid(S, S.startGrids[1])],
     };
     S.log.push("── 對戰開始 ──");
@@ -388,18 +428,38 @@
     if (!T.mobile || V.nodes[from].hq) return out;
     const seen = new Set();
     const add = (to, kind) => { if (!seen.has(to)) { seen.add(to); out.push({ to, kind }); } };
+    // 沼澤：坦克、炸彈進不去（含攻擊沼澤裡的棋）
+    const swampBan = R.swamp && (T.kind === "tank" || T.kind === "bomb");
     // 回傳是否可以穿過（空格）
     const consider = (to) => {
+      if (swampBan && V.nodes[to].swamp) return false;
       const q = B[to];
       if (!q) { add(to, "move"); return true; }
       if (q.side !== side && !V.nodes[to].camp) add(to, "attack");
       return false;
     };
+    // 村莊：從村莊出發，這一手只能走公路一格（不上鐵路、坦克不衝、不空降）
+    const villageStart = R.village && V.nodes[from].village;
 
     for (const n of roadNbrs(S, from)) consider(n);
 
-    if (V.nodes[from].rail) {
-      if (T.kind === "engineer") {
+    if (V.nodes[from].rail && !villageStart) {
+      if (T.kind === "engineer" && R.gauge && V.railEdge) {
+        // 工兵可以轉彎；換軌站要停下；窄軌合計最多 3 格
+        const used = new Map([[from, 0]]);
+        const queue = [from];
+        while (queue.length) {
+          const u = queue.shift();
+          if (u !== from && V.nodes[u].gaugeBreak) continue;
+          for (const v of V.railAdj[u]) {
+            const g = V.railEdge.get(u < v ? `${u}-${v}` : `${v}-${u}`);
+            const k = used.get(u) + (g === "narrow" ? 1 : 0);
+            if (k > 3 || (used.has(v) && used.get(v) <= k)) continue;
+            used.set(v, k);
+            if (consider(v)) queue.push(v);
+          }
+        }
+      } else if (T.kind === "engineer") {
         const vis = new Set([from]);
         const queue = [from];
         while (queue.length) {
@@ -413,8 +473,12 @@
       } else {
         for (const [li, pos] of V.lineIndex[from]) {
           const L = V.lines[li];
+          // 窄軌：最多 3 格，坦克不能上（鐵路線已在換軌站切開，所以會自然停在換軌站）
+          const narrow = R.gauge && V.lineGauge && V.lineGauge[li] === "narrow";
+          if (narrow && T.kind === "tank") continue;
+          const cap = narrow ? 3 : Infinity;
           for (const dir of [-1, 1]) {
-            for (let i = pos + dir; i >= 0 && i < L.length; i += dir) {
+            for (let i = pos + dir, k = 1; i >= 0 && i < L.length && k <= cap; i += dir, k++) {
               if (!consider(L[i])) break;
             }
           }
@@ -422,7 +486,7 @@
       }
     }
 
-    if (T.kind === "tank") {
+    if (T.kind === "tank" && !villageStart) {
       if (R.tankTurn) {
         // 兩步正交，可以轉一次彎；第一步必須是空格
         for (const [dx, dy] of ORTH) {
@@ -446,9 +510,30 @@
           }
         }
       }
+      // 平原：整段路（含起點、終點）都是平原時可以走 3 格；仍然最多轉一次彎、中間格要空
+      if (R.plain && V.nodes[from].plain) {
+        const plain = (n) => n >= 0 && V.nodes[n].plain;
+        for (const d1 of ORTH) {
+          const m1 = stepOrth(S, from, d1[0], d1[1]);
+          if (!plain(m1) || B[m1]) continue;
+          for (const d2 of ORTH) {
+            if (d2[0] === -d1[0] && d2[1] === -d1[1]) continue;
+            if (!R.tankTurn && d2 !== d1) continue;
+            const m2 = stepOrth(S, m1, d2[0], d2[1]);
+            if (!plain(m2) || B[m2]) continue;
+            for (const d3 of ORTH) {
+              if (d3[0] === -d2[0] && d3[1] === -d2[1]) continue;
+              if ((d2 !== d1) + (d3 !== d2) > 1) continue;
+              if (!R.tankTurn && d3 !== d1) continue;
+              const k = stepOrth(S, m2, d3[0], d3[1]);
+              if (plain(k) && k !== from) consider(k);
+            }
+          }
+        }
+      }
     }
 
-    if (T.kind === "para" && !dropUsed) {
+    if (T.kind === "para" && !dropUsed && !villageStart) {
       // 防空：對方防空炮相鄰的格子不能空降
       let blocked = null;
       if (R.aa) {
@@ -459,19 +544,28 @@
         }
       }
       for (const nd of V.nodes) {
-        if (nd.side === side || nd.row >= V.dropRows || nd.camp || nd.hq) continue;
+        if (nd.side === side || nd.row >= V.dropRows || nd.camp || nd.hq || nd.mountain) continue;
         if (blocked && blocked.has(nd.id)) continue;
+        // 沼澤、村莊不能空降
+        if ((R.swamp && nd.swamp) || (R.village && nd.village)) continue;
         if (!B[nd.id] && !seen.has(nd.id)) { seen.add(nd.id); out.push({ to: nd.id, kind: "drop" }); }
       }
     }
 
     if (T.kind === "scout") {
-      const hidden = (n) => R.forest && V.nodes[n].forest;
+      // 森林、村莊裡的棋看不到
+      const hidden = (n) => (R.forest && V.nodes[n].forest) || (R.village && V.nodes[n].village);
       const canScout = (n) => {
         const q = B[n];
         return q && q.side !== side && popcount(q.cand[side]) > 1 && !hidden(n);
       };
-      if (R.scout2) {
+      if (R.plain) {
+        // 目標站在平原上時範圍多 1 格
+        const base = R.scout2 ? 2 : 1;
+        for (const [n, d] of roadDistances(S, from, base + 1)) {
+          if (d <= base + (V.nodes[n].plain ? 1 : 0) && canScout(n)) out.push({ to: n, kind: "scout" });
+        }
+      } else if (R.scout2) {
         const near = new Set(roadNbrs(S, from));
         const ring = new Set(near);
         for (const m of near) for (const k of roadNbrs(S, m)) if (k !== from) ring.add(k);
@@ -501,6 +595,26 @@
       }
     }
     return out;
+  }
+
+  /** 從 n 走公路的距離表（不看格子有沒有棋），回傳 [[格子, 距離], ...]，依發現順序、不含起點 */
+  function roadDistances(S, n, maxD) {
+    const dist = new Map([[n, 0]]);
+    const order = [];
+    let frontier = [n];
+    for (let d = 1; d <= maxD; d++) {
+      const next = [];
+      for (const u of frontier) {
+        for (const v of roadNbrs(S, u)) {
+          if (dist.has(v)) continue;
+          dist.set(v, d);
+          order.push([v, d]);
+          next.push(v);
+        }
+      }
+      frontier = next;
+    }
+    return order;
   }
 
   function legalMoves(S, from) {
@@ -540,6 +654,31 @@
     p.cand[0] = p.cand[1] = 1 << p.t;
   }
 
+  /** 地形統計與音效用的事件旗標：換軌站停下、窄軌、坦克在平原走 3 格 */
+  function terrainMoveStats(S, from, to, p, ev) {
+    const V = S.V, R = V.rule;
+    if (!R.gauge && !R.plain) return;
+    if (V.adj[from].includes(to)) return;
+    const kind = V.types[p.t].kind;
+    let line = -1;
+    for (const [li] of V.lineIndex[from]) if (V.lineIndex[to].some(([lj]) => lj === li)) line = li;
+    if (line >= 0 || (kind === "engineer" && V.nodes[to].rail)) {
+      if (R.gauge && V.nodes[to].gaugeBreak) { S.stats.gaugeStop[p.side]++; ev.gaugeStop = true; }
+      if (R.gauge && line >= 0 && V.lineGauge[line] === "narrow") { S.stats.narrow[p.side]++; ev.narrow = true; }
+    } else if (kind === "tank" && R.plain && V.nodes[from].plain && V.nodes[to].plain && !withinTwo(S, from, to)) {
+      S.stats.tank3[p.side]++;
+      ev.tank3 = true;
+    }
+  }
+  /** 兩格以內（第一格要空）到得了嗎：分辨坦克平原的第 3 格 */
+  function withinTwo(S, from, to) {
+    for (const m of roadNbrs(S, from)) {
+      if (m === to) return true;
+      if (!S.board[m] && roadNbrs(S, m).includes(to)) return true;
+    }
+    return false;
+  }
+
   /** 對手看到這步棋之後，能推得這顆棋是哪種特殊棋（工兵鐵路轉彎、坦克兩步）。這是推理，不翻明棋 */
   function revealByMovement(S, from, to, p) {
     const V = S.V;
@@ -574,6 +713,7 @@
       const k = S.stats.kills[killer];
       k[T.name] = (k[T.name] || 0) + 1;
     }
+    if (T.kind === "commander") S._fx.commanderDown = true;
     if (T.kind === "commander" && S.V.commanderRevealsFlag) {
       for (const q of S.board) {
         if (q && q.side === p.side && S.V.types[q.t].kind === "flag") {
@@ -593,10 +733,16 @@
     for (let n = 0; n < B.length; n++) {
       const r = B[n];
       if (!r || V.types[r.t].kind !== "radar") continue;
-      for (const m of roadNbrs(S, n)) {
+      // 範圍 1 格；目標站在平原上時 2 格。森林、村莊裡的看不到
+      const targets = V.rule.plain
+        ? roadDistances(S, n, 2).filter(([m, d]) => d === 1 || V.nodes[m].plain).map(([m]) => m)
+        : roadNbrs(S, n);
+      for (const m of targets) {
         const q = B[m];
         if (!q || q.side === r.side || q.faceUp || (V.rule.forest && V.nodes[m].forest)) continue;
+        if (V.rule.village && V.nodes[m].village) continue;
         reveal(q);
+        S._fx.radar = true;
         S.stats.radar[r.side]++;
         S.log.push(`${sideLabel(S, r.side)}雷達站：揭露${r.side === S.human ? "一顆敵棋（" + V.types[q.t].name + "）" : "我方一顆棋"}`);
       }
@@ -616,6 +762,8 @@
     const who = sideLabel(S, p.side);
     const pieceName = (side, t) => (side === S.human || S.phase === "end" ? V.types[t].name : "？");
     const entry = { k: mv.kind, f: from, t: mv.to };
+    // 只給音效／介面用的事件旗標（不影響規則）
+    S._fx = {};
     if (S.cheat.infinite && p.side === S.human) entry.inf = true;
     S.rec.push(entry);
     // 這手開始前就翻倒的己方棋，這手結束時扶正
@@ -625,7 +773,14 @@
       if (R.forest && V.nodes[to].forest) {
         p.stunned = true;
         S.stats.forest[p.side]++;
+        ev.stun = "forest";
       }
+      if (R.swamp && V.nodes[to].swamp) {
+        p.stunned = true;
+        S.stats.swamp[p.side]++;
+        ev.stun = "swamp";
+      }
+      if (R.village && V.nodes[to].village) S.stats.village[p.side]++;
     };
 
     if (mv.kind === "scout") {
@@ -637,7 +792,10 @@
       S.log.push(`${who}偵察 → 揭露${p.side === S.human ? "：" + V.types[q.t].name : "我方一顆棋"}`);
       S.quiet++;
     } else if (mv.kind === "move" || mv.kind === "drop") {
-      if (mv.kind === "move") revealByMovement(S, from, mv.to, p);
+      if (mv.kind === "move") {
+        revealByMovement(S, from, mv.to, p);
+        terrainMoveStats(S, from, mv.to, p, ev);
+      }
       B[mv.to] = p;
       B[from] = null;
       p.moved = true;
@@ -699,7 +857,7 @@
         S.ply++;
         endGame(S, p.side, `${who}奪下軍旗`);
         entry.n = S.turn;
-        return ev;
+        return Object.assign(ev, S._fx);
       }
       if (r === "win") { removePiece(S, mv.to, p.side); B[mv.to] = p; B[from] = null; enter(mv.to); }
       else if (r === "lose") { removePiece(S, from, opp); }
@@ -719,11 +877,11 @@
     if (S.quiet >= V.drawQuiet) {
       endGame(S, -1, `連續 ${V.drawQuiet} 步沒有對撞，和棋`);
       entry.n = S.turn;
-      return ev;
+      return Object.assign(ev, S._fx);
     }
     checkStuck(S);
     entry.n = S.turn;
-    return ev;
+    return Object.assign(ev, S._fx);
   }
 
   /** 輪到的一方無棋可動 → 判負；但只是棋都翻倒的話，跳過這回合（規格 C15） */
@@ -734,6 +892,7 @@
     const stunned = S.board.filter((p) => p && p.side === side && p.stunned);
     if (stunned.length && depth < 2) {
       for (const p of stunned) p.stunned = false;
+      S._fx.passed = true;
       S.log.push(`${sideLabel(S, side)}的棋都翻倒了，跳過這回合`);
       S.rec.push({ k: "pass", n: 1 - side });
       S.ply++;
@@ -846,6 +1005,6 @@
     resolveRules, buildVariant, placementError, originMask, resolve, resolveAt, defRank, snipeHits,
     rankedKind, newGame, makePiece, setSideGrid, sideGrid, validateSide, startPlay, movesFor, legalMoves,
     hasAnyMove, applyMove, popcount, singleType, snapshot, restore, swapSides, cheatAdd, cheatDelete,
-    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, reveal, namesGrid,
+    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, namesGrid,
   });
 })(typeof window !== "undefined" ? window : globalThis);

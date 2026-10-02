@@ -377,8 +377,9 @@
           const threatAfter = flagThreatened([from, mv.to]);
           const pressAfter = L.smart ? boardPressure([from, mv.to]) : 0;
           B[from] = p; B[mv.to] = null;
-          // 空降落地會翻倒一回合，逃不掉，危險加重
-          const stunAfter = (mv.kind === "drop" && V.rule.dropStun) || (V.rule.forest && V.nodes[mv.to].forest);
+          // 空降落地、走進森林或沼澤會翻倒一回合，逃不掉，危險加重
+          const stunAfter = (mv.kind === "drop" && V.rule.dropStun) || (V.rule.forest && V.nodes[mv.to].forest)
+            || (V.rule.swamp && V.nodes[mv.to].swamp);
           score += (dangerFrom - dTo * (stunAfter ? 1.5 : 1)) * 0.8 * L.danger;
           if (L.smart) {
             // 只有「這顆棋自己很危險」時，才用減壓鼓勵逃走／換位
@@ -396,6 +397,8 @@
           const pushBase = MT.kind === "engineer" ? 0.3 : MT.kind === "commander" ? 0.4 : MT.rank <= 4 ? 1.6 : 1;
           score += gain * pushBase * L.push;
           if (V.nodes[mv.to].camp) score += 2.5 * L.camp;
+          // 村莊：大子受威脅時躲進去（不會被偵察、雷達看到）；平時不加分，免得進進出出空轉
+          if (V.rule.village && V.nodes[mv.to].village && MT.value >= 35 && dangerFrom > 0 && !V.nodes[from].village) score += 2 * L.camp;
           if (V.nodes[from].camp) score -= 1.5 * L.camp;
           if (V.nodes[mv.to].hq && V.nodes[mv.to].side === side) score -= 40;
           if (mv.kind === "drop") score += 3 * L.drop;
