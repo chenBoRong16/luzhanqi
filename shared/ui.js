@@ -70,6 +70,8 @@
       <header class="topbar">
         <a class="back" href="../index.html">← 選版本</a>
         <h1>${V.title}</h1>
+        <button type="button" class="ghost" data-act="music" title="背景音樂開關">${(LZ.audio && !LZ.audio.isMusicOn()) ? "音樂：關" : "音樂：開"}</button>
+        <button type="button" class="ghost" data-act="mute" title="音效總開關">${(LZ.audio && LZ.audio.isMuted()) ? "聲音：關" : "聲音：開"}</button>
         <button type="button" class="ghost" data-act="rules">規則</button>
       </header>
       <main class="layout">
@@ -319,8 +321,16 @@
       if (!S.cheat.used && !S.illegal[S.human]) saveMyGrid(S.startGrids[S.human]);
       if (S.illegal.some(Boolean)) S.log.push("【作弊】使用違規佈局開局");
       ui.sel = null; ui.legal = [];
+      if (LZ.audio) LZ.audio.playStart();
       render();
       scheduleAI();
+    }
+
+    function afterMove(ev, prevPhase) {
+      if (LZ.audio && ev) LZ.audio.playEvent(ev);
+      if (LZ.audio && prevPhase === "play" && S.phase === "end") {
+        LZ.audio.playOutcome(S.winner, S.human);
+      }
     }
 
     // ---------- 電腦 ----------
@@ -338,7 +348,10 @@
     function computerMove(side) {
       if (side === S.human) pushHistory();
       ui.sel = null; ui.legal = [];
-      return LZ.aiTurn(S, side, Math.random, levelOf(side), aiOpts(side));
+      const prevPhase = S.phase;
+      const ev = LZ.aiTurn(S, side, Math.random, levelOf(side), aiOpts(side));
+      afterMove(ev, prevPhase);
+      return ev;
     }
     function pushHistory() {
       S.history.push(LZ.snapshot(S));
@@ -419,7 +432,7 @@
         } else {
           const err = deployError(d.from, d.over);
           if (err) ui.flash = err;
-          else { const a = S.board[d.from]; S.board[d.from] = S.board[d.over]; S.board[d.over] = a; }
+          else { const a = S.board[d.from]; S.board[d.from] = S.board[d.over]; S.board[d.over] = a; if (LZ.audio) LZ.audio.playDeploySwap(); }
         }
       }
       ui.sel = null; ui.legal = [];
@@ -490,7 +503,9 @@
 
     function doMove(from, mv) {
       pushHistory();
-      LZ.applyMove(S, from, mv);
+      const prevPhase = S.phase;
+      const ev = LZ.applyMove(S, from, mv);
+      afterMove(ev, prevPhase);
       ui.sel = null; ui.legal = [];
       render();
       scheduleAI();
@@ -515,6 +530,7 @@
         S.board[ui.sel] = S.board[n];
         S.board[n] = a;
         ui.sel = null;
+        if (LZ.audio) LZ.audio.playDeploySwap();
       } else if (p) {
         ui.sel = n;
       } else {
@@ -893,6 +909,10 @@
       bw.textContent = ui.watch ? "暫停觀戰" : S.phase === "end" ? "觀戰（本局已結束）" : "開始觀戰";
       bw.disabled = S.phase === "end" || !!ui.replay;
       bw.classList.toggle("primary", ui.watch);
+      const muteBtn = app.querySelector('[data-act="mute"]');
+      if (muteBtn && LZ.audio) muteBtn.textContent = LZ.audio.isMuted() ? "聲音：關" : "聲音：開";
+      const musicBtn = app.querySelector('[data-act="music"]');
+      if (musicBtn && LZ.audio) musicBtn.textContent = LZ.audio.isMusicOn() ? "音樂：開" : "音樂：關";
       const X = view();
       const me = ui.replay ? ui.replay.rec.human : S.human;
       elLosses.innerHTML = `<div><b class="me-c">我方</b> ${lossText(X, me, me)}</div><div><b class="foe-c">敵方</b> ${lossText(X, 1 - me, me)}</div>`;
@@ -953,7 +973,9 @@
     }
 
     // ---------- 按鈕 ----------
+    on(app, "pointerdown", () => { if (LZ.audio) LZ.audio.unlock(); }, { once: false });
     on(app, "click", (e) => {
+      if (LZ.audio) LZ.audio.unlock();
       const b = e.target.closest("button");
       if (!b || elPop.contains(b) || elModal.contains(b)) return;
       if (b.dataset.first != null) { ui.first = persist.first = Number(b.dataset.first); render(); return; }
@@ -981,6 +1003,20 @@
       ui.flash = "";
       switch (act) {
         case "rules": return openRules();
+        case "mute":
+          if (LZ.audio) {
+            LZ.audio.unlock();
+            LZ.audio.setMuted(!LZ.audio.isMuted());
+            LZ.audio.beepUi();
+          }
+          return render();
+        case "music":
+          if (LZ.audio) {
+            LZ.audio.unlock();
+            LZ.audio.setMusic(!LZ.audio.isMusicOn());
+            LZ.audio.beepUi();
+          }
+          return render();
         case "start": return startBattle();
         case "random":
           LZ.setSideGrid(S, S.human, LZ.randomGrid(V));

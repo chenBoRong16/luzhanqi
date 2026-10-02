@@ -46,12 +46,13 @@ textarea { width: 100%; font-family: Consolas, "Cascadia Mono", monospace; font-
 
 /* ---------- 版面 ---------- */
 .topbar {
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 10px 20px; border-bottom: 1px solid var(--line);
 }
-.topbar h1 { margin: 0; font-size: 18px; letter-spacing: .08em; flex: 1; }
+.topbar h1 { margin: 0; font-size: 18px; letter-spacing: .08em; flex: 1; min-width: 8em; }
 .topbar .back { color: var(--muted); text-decoration: none; }
 .topbar .back:hover { color: var(--ink); }
+.topbar .ghost { white-space: nowrap; font-size: 13px; }
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 330px;
