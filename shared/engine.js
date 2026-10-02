@@ -385,6 +385,7 @@
     S.recStart = {
       first, human: S.human, rules: Object.assign({}, V.rule), illegal: S.illegal.slice(), cheatUsed: S.cheat.used,
       map: V.map || null,
+      drawQuiet: S.drawQuiet != null && S.drawQuiet !== V.drawQuiet ? S.drawQuiet : undefined,
       grids: [namesGrid(S, S.startGrids[0]), namesGrid(S, S.startGrids[1])],
     };
     S.log.push("── 對戰開始 ──");
@@ -874,14 +875,27 @@
     } else {
       S.turn = opp;
     }
-    if (S.quiet >= V.drawQuiet) {
-      endGame(S, -1, `連續 ${V.drawQuiet} 步沒有對撞，和棋`);
+    if (drawLimit(S) && S.quiet >= drawLimit(S)) {
+      endGame(S, -1, `連續 ${drawLimit(S)} 步沒有對撞，和棋`);
       entry.n = S.turn;
       return Object.assign(ev, S._fx);
     }
     checkStuck(S);
     entry.n = S.turn;
     return Object.assign(ev, S._fx);
+  }
+
+  /** 這盤的判和手數（連續幾手沒有對撞判和）；0＝不判和。沒設定時用版本預設 */
+  function drawLimit(S) {
+    return S.drawQuiet != null ? S.drawQuiet : S.V.drawQuiet;
+  }
+
+  /** 作弊：開戰後改和局條件（記進棋譜，複盤時在同一手生效） */
+  function cheatSetDraw(S, n) {
+    S.drawQuiet = n;
+    S.cheat.used = true;
+    if (S.phase !== "deploy") S.rec.push({ c: "draw", n });
+    S.log.push(`【作弊】和局條件：${n ? `連續 ${n} 手沒有對撞判和` : "不判和"}`);
   }
 
   /** 輪到的一方無棋可動 → 判負；但只是棋都翻倒的話，跳過這回合（規格 C15） */
@@ -898,8 +912,8 @@
       S.ply++;
       S.quiet++;
       S.turn = 1 - side;
-      if (S.quiet >= S.V.drawQuiet) {
-        endGame(S, -1, `連續 ${S.V.drawQuiet} 步沒有對撞，和棋`);
+      if (drawLimit(S) && S.quiet >= drawLimit(S)) {
+        endGame(S, -1, `連續 ${drawLimit(S)} 步沒有對撞，和棋`);
         return;
       }
       checkStuck(S, depth + 1);
@@ -1005,6 +1019,6 @@
     resolveRules, buildVariant, placementError, originMask, resolve, resolveAt, defRank, snipeHits,
     rankedKind, newGame, makePiece, setSideGrid, sideGrid, validateSide, startPlay, movesFor, legalMoves,
     hasAnyMove, applyMove, popcount, singleType, snapshot, restore, swapSides, cheatAdd, cheatDelete,
-    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, namesGrid, newStats,
+    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, namesGrid, newStats, drawLimit, cheatSetDraw,
   });
 })(typeof window !== "undefined" ? window : globalThis);

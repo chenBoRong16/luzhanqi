@@ -40,7 +40,7 @@
       ply: S.ply, quiet: S.quiet, lastMove: S.lastMove, log: [], nextPid: S.nextPid,
       startGrids: S.startGrids, deadKnown: S.deadKnown.map((a) => a.slice()), lost: [[], []],
       broken: S.broken.slice(), illegal: S.illegal, cheat: S.cheat, history: [], rec: [], recStart: null,
-      stats: LZ.newStats(), _fx: {}, lastMoves: S.lastMoves ? S.lastMoves.slice() : [null, null],
+      drawQuiet: S.drawQuiet, stats: LZ.newStats(), _fx: {}, lastMoves: S.lastMoves ? S.lastMoves.slice() : [null, null],
     };
   }
 
@@ -169,22 +169,32 @@
     const L = LZ.aiResolveBrain(V, settings, style);
     const omniscient = !!opts.omniscient;
     const list = [];
-    const rootPick = LZ.aiScoreMoves(S, side, rng, L, { omniscient, out: list });
+    const rootPick = LZ.aiScoreMoves(S, side, rng, L, { omniscient, out: list, explain: !!opts.explain });
     state.rootPick = rootPick;
     state.best = () => rootPick;
     const P = DEPTHS[depth];
     // 只有一步可走等情況不必推演；這種「秒下」不拿來估計速度
-    if (!rootPick || !P.samples || list.length <= 1) { state.early = !!P.samples; return { pick: rootPick, depth }; }
+    state.list = list;
+    // 避免輸而改走的保留手（ai.js 標 held）不再推演推翻
+    if (!rootPick || rootPick.held || !P.samples || list.length <= 1) { state.early = !!P.samples; return { pick: rootPick, depth, list }; }
     const rnd = xorshift(Math.floor(rng() * 4294967296));
     const order = list.map((c, i) => [c, i]);
     order.sort((a, b) => b[0].score - a[0].score || a[1] - b[1]);
-    const cands = order.slice(0, P.top).map(([c]) => ({ c, sum: 0, n: 0, extSum: 0, extN: 0 }));
+    const top = order.slice(0, P.top).map(([c]) => c);
+    // opts.extra：另外要評估的手（走棋提醒用：玩家這一手），用同一批抽樣比較
+    for (const x of opts.extra || []) {
+      const c = list.find((m) => m.from === x.from && m.mv.to === x.mv.to && m.mv.kind === x.mv.kind);
+      if (c && !top.includes(c)) top.push(c);
+    }
+    const cands = top.map((c) => ({ c, sum: 0, n: 0, extSum: 0, extN: 0 }));
+    state.cands = cands;
     const brains = {
       me: quietBrain(V, L),
       foe: quietBrain(V, LZ.aiResolveBrain(V, "hardest", "balanced")),
     };
     const W = TUNE.lineWeight;
     const total = (c) => c.c.score + W * (c.extN ? c.extSum / c.extN : c.n ? c.sum / c.n : 0);
+    state.total = total;
     // 只比較已推演過的候選；全都還沒算到時用深度 1 的結果
     state.best = () => {
       let b = null, bs = -Infinity;
@@ -195,10 +205,10 @@
       }
       return b ? Object.assign({}, b.c, { score: bs }) : rootPick;
     };
+    // 抽樣一開始就全部抽好：多評估幾手也不會改變抽到的情況
     const worlds = [];
-    for (let s = 0; s < P.samples; s++) {
-      const world = omniscient ? [] : sampleWorld(S, side, rnd, P.samples === 1 && TUNE.likely);
-      worlds.push(world);
+    for (let s = 0; s < P.samples; s++) worlds.push(omniscient ? [] : sampleWorld(S, side, rnd, P.samples === 1 && TUNE.likely));
+    for (const world of worlds) {
       for (const c of cands) {
         const sim = simClone(S);
         applyWorld(sim, world);
@@ -226,7 +236,7 @@
         }
       }
     }
-    return { pick: state.best(), depth };
+    return { pick: state.best(), depth, list };
   }
 
   /**
@@ -249,6 +259,14 @@
     return (workUnits(clampDepth(depth)) * msPerUnit(V)) / 1000;
   }
 
+  /** 搜尋結束時每一手的分數：推演過的用推演後的分數，其餘用深度 1 分數 */
+  function scoredOf(state) {
+    const out = new Map();
+    for (const m of state.list || []) out.set(m, m.score);
+    if (state.cands && state.total) for (const c of state.cands) if (c.n) out.set(c.c, state.total(c));
+    return [...out].map(([m, score]) => ({ from: m.from, mv: m.mv, score, why: m.why, held: m.held }));
+  }
+
   const now = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
 
   /**
@@ -268,7 +286,7 @@
     const pick = r.done ? r.value.pick : state.best();
     const ms = now() - t0;
     if (!timedOut && r.done && !state.early) recordPerf(S.V, workUnits(clampDepth(settings.depth)), ms);
-    return { pick, ms, timedOut, depth: clampDepth(settings.depth) };
+    return { pick, ms, timedOut, depth: clampDepth(settings.depth), scored: opts.explain ? scoredOf(state) : null };
   }
 
   /**
@@ -300,7 +318,7 @@
       over = true;
       const ms = now() - t0;
       if (!timedOut && !stopped && !state.early) recordPerf(S.V, workUnits(clampDepth(settings.depth)), ms);
-      onDone({ pick, ms, timedOut, stopped, depth: clampDepth(settings.depth) });
+      onDone({ pick, ms, timedOut, stopped, depth: clampDepth(settings.depth), scored: opts.explain ? scoredOf(state) : null });
     };
     const step = () => {
       if (over) return;
@@ -343,5 +361,6 @@
     aiEstimateSeconds: estimateSeconds,
     aiWorkUnits: workUnits,
     aiSampleWorld: sampleWorld,
+    aiRng: xorshift,
   });
 })(typeof window !== "undefined" ? window : globalThis);

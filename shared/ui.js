@@ -58,6 +58,19 @@
     const V = LZ.VARIANT;
     const { W, H, px, py } = LZ.boardGeom(V);
     const STORE_KEY = `lzq-${V.key}-my-layout`;
+    // 設置：和局條件、走棋提醒（每版一份）
+    const SET_KEY = `lzq-${V.key}-settings`;
+    const DRAW_NS = [30, 50, 60, 80, 100, 150];
+    const setting = (() => {
+      const raw = storage(SET_KEY) || {};
+      const d = raw.draw || {}, a = raw.advice || {};
+      return {
+        draw: { on: d.on !== false, n: DRAW_NS.includes(d.n) ? d.n : V.drawQuiet },
+        advice: { on: a.on !== false, when: a.when === "after" ? "after" : "before", ai: a.ai === "own" ? "own" : "same" },
+      };
+    })();
+    const saveSetting = () => storage(SET_KEY, setting);
+    const drawFromSetting = () => (setting.draw.on ? setting.draw.n : 0);
     const rulesHtml = typeof V.rulesHtml === "function" ? V.rulesHtml(V) : V.rulesHtml;
 
     let S = null;
@@ -115,6 +128,21 @@
             <p class="muted">換地圖會重新開局；開戰後鎖定。</p>
           </details>` : ""}
           ${ruleCard}
+          <details class="card settings-card">
+            <summary>設置</summary>
+            <label class="check"><input type="checkbox" data-set="drawOn"> 連續無對撞判和</label>
+            <label class="ai-limit indent">手數 <select data-set="drawN">${DRAW_NS.map((n) => `<option value="${n}">${n} 手</option>`).join("")}</select></label>
+            <p class="muted set-draw-note"></p>
+            <div class="sub-title">走棋提醒</div>
+            <label class="check"><input type="checkbox" data-set="adviceOn"> AI 覺得你這步不好時提醒你</label>
+            <div class="seg small indent" data-group="adviceWhen">
+              <button type="button" data-setv="when:before" title="先不走，說明原因，讓你選照走或取消">走之前</button>
+              <button type="button" data-setv="when:after" title="照走，走完再說上一步哪裡不好">走之後</button>
+            </div>
+            <label class="ai-limit indent">提醒用 AI
+              <select data-set="adviceAi"><option value="same">跟「幫我下的電腦」相同</option><option value="own">另外設定（電腦卡片多一組）</option></select>
+            </label>
+          </details>
           <div class="card">
             <div class="card-title">標記敵棋</div>
             <p class="muted">點敵棋（或按右鍵）選它可能是什麼。</p>
@@ -139,7 +167,7 @@
             </div>
           </div>
           <details class="card cheat">
-            <summary>作弊選單</summary>
+            <summary>作弊介面</summary>
             <p class="muted">每一項各自開關。</p>
             <label class="check"><input type="checkbox" data-cheat="infinite"> 無限回合（電腦不走，一直輪到你）</label>
             <label class="check"><input type="checkbox" data-cheat="reveal"> 上帝視角（看見敵方棋面）</label>
@@ -157,6 +185,9 @@
             <label class="check"><input type="checkbox" data-cheat="swap"> 交換兩邊棋盤</label>
             <div class="row indent" data-show="swap"><button type="button" data-act="swap">交換兩邊棋盤</button></div>
             <label class="check"><input type="checkbox" data-cheat="ignorePlacement"> 無視佈局條件（可載入、擺出違規的佈局）</label>
+            <label class="ai-limit">和局條件（開戰後也能改）
+              <select data-act="cheatDraw"><option value="0">不判和</option>${DRAW_NS.map((n) => `<option value="${n}">連續 ${n} 手沒有對撞判和</option>`).join("")}</select>
+            </label>
             <label class="check"><input type="checkbox" data-cheat="undo"> 悔棋</label>
             <div class="row indent" data-show="undo"><button type="button" data-act="undo">悔棋</button></div>
             <div class="sub-title">其他</div>
@@ -202,7 +233,8 @@
         render();
       },
     });
-    stopAll = () => { cancelThink(); clearTimeout(ui.aiTimer); };
+    stopAll = () => { cancelThink(); cancelAdvice(); clearTimeout(ui.aiTimer); };
+    aiPanel.showAdvice(setting.advice.ai === "own");
 
     elSvg.innerHTML = LZ.drawBoard(V);
     const cellEls = buildCells();
@@ -246,6 +278,8 @@
       ui.replay = null;
       const keep = S ? Object.assign({}, S.cheat) : persist.cheat;
       S = LZ.newGame(V);
+      S.drawQuiet = drawFromSetting();
+      cancelAdvice();
       if (keep) { Object.assign(S.cheat, keep); S.cheat.used = false; }
       LZ.setSideGrid(S, S.human, myGrid || loadMyGrid());
       LZ.setSideGrid(S, 1 - S.human, foeGrid || LZ.randomGrid(V, Math.random, 1 - S.human));
@@ -262,6 +296,9 @@
       if (S.illegal.some(Boolean)) S.log.push("【作弊】使用違規佈局開局");
       ui.sel = null; ui.legal = [];
       if (LZ.audio) LZ.audio.playStart();
+      if (!LZ.drawLimit(S) && ["foe", "me"].some((w) => aiPanel.get(w).flagMode !== "normal")) {
+        S.log.push("提示：電腦設成不佔軍旗、又不判和，這盤可能不會自己結束");
+      }
       render();
       scheduleAI();
     }
@@ -488,7 +525,65 @@
       return "這顆棋現在沒有路可走";
     }
 
+    // ---------- 走棋提醒 ----------
+    const sameMove = (a, b) => a && b && a.from === b.from && a.mv.to === b.mv.to && a.mv.kind === b.mv.kind;
+    function cancelAdvice() {
+      if (ui.advice && ui.advice.handle) ui.advice.handle.cancel();
+      ui.advice = null;
+    }
+    /** 用提醒用 AI 判斷 S0 局面下 move 好不好（S0 不能在判斷途中被改；事後模式傳複本） */
+    function checkAdvice(S0, move, done) {
+      const set = setting.advice.ai === "own" ? aiPanel.get("advice") : aiPanel.get("me");
+      return LZ.aiThink(S0, S0.turn, LZ.aiRng(LZ.adviceSeed(S0)), LZ.adviceSettings(set),
+        { omniscient: aiOpts(S.human).omniscient, explain: true, extra: [move] },
+        (res) => done(LZ.adviceJudge(V, res, move)));
+    }
+    function moveName(m) {
+      const a = V.nodes[m.from], b = V.nodes[m.mv.to];
+      const T = S.board[m.from] ? V.types[S.board[m.from].t].name : "棋";
+      return `${T}（${a.col + 1},${a.row + 1}）→（${b.col + 1},${b.row + 1}）`;
+    }
     function doMove(from, mv) {
+      const move = { from, mv };
+      const on = setting.advice.on && !ui.watch && !ui.replay && S.phase === "play" && S.turn === S.human;
+      if (!on) return commitMove(from, mv);
+      // 事前：被提醒後同一步再點一次＝照走
+      if (ui.advice && ui.advice.state === "warn" && sameMove(ui.advice.move, move)) { cancelAdvice(); return commitMove(from, mv); }
+      cancelAdvice();
+      if (setting.advice.when === "after") {
+        // 事後：先照走，再用走之前的局面複本判斷
+        const C = LZ.newGame(V);
+        LZ.restore(C, LZ.snapshot(S));
+        Object.assign(C, { human: S.human, cheat: Object.assign({}, S.cheat), drawQuiet: S.drawQuiet, lastMoves: S.lastMoves ? S.lastMoves.slice() : null });
+        const ply = S.ply;
+        commitMove(from, mv);
+        const a = { state: "after", move };
+        ui.advice = a;
+        a.handle = checkAdvice(C, move, (j) => {
+          if (ui.advice !== a) return;
+          ui.advice = null;
+          if (j && j.bad) {
+            // 狀態列一點盤面就會清掉，所以戰報也留一份
+            ui.flash = `上一步（第 ${ply + 1} 手）可能不好：${j.reason}。AI 會走 ${moveName(j.better)}`;
+            S.log.push(`【提醒】${ui.flash}`);
+            render();
+          }
+        });
+        return;
+      }
+      const a = { state: "checking", move };
+      ui.advice = a;
+      a.handle = checkAdvice(S, move, (j) => {
+        if (ui.advice !== a) return;
+        if (!j || !j.bad) { ui.advice = null; commitMove(from, mv); return; }
+        ui.advice = { state: "warn", move, reason: j.reason, better: j.better };
+        render();
+      });
+      renderStatus();
+    }
+
+    function commitMove(from, mv) {
+      cancelAdvice();
       pushHistory();
       const prevPhase = S.phase;
       const ev = LZ.applyMove(S, from, mv);
@@ -673,7 +768,7 @@
       }
       const lm = X.lastMove;
       const editing = !ui.replay && (S.cheat.add || S.cheat.del);
-      const sug = currentSuggestion();
+      const sug = (ui.advice && ui.advice.state === "warn" && ui.advice.better) || currentSuggestion();
       for (const nd of V.nodes) {
         const n = nd.id;
         const el = cellEls[n];
@@ -766,9 +861,11 @@
     }
 
     function quietTrack(X) {
-      const pct = Math.min(100, (X.quiet / V.drawQuiet) * 100);
-      return `<div class="track" title="判和計數軌：連續 ${X.quiet} 手沒有對撞，滿 ${V.drawQuiet} 手判和"><div class="track-fill" style="width:${pct}%"></div></div>
-        <p class="muted">第 ${X.ply} 手 · 判和計數 ${X.quiet} / ${V.drawQuiet}</p>`;
+      const lim = LZ.drawLimit(X);
+      if (!lim) return `<p class="muted">第 ${X.ply} 手 · 不判和（連續 ${X.quiet} 手沒有對撞）</p>`;
+      const pct = Math.min(100, (X.quiet / lim) * 100);
+      return `<div class="track" title="判和計數軌：連續 ${X.quiet} 手沒有對撞，滿 ${lim} 手判和"><div class="track-fill" style="width:${pct}%"></div></div>
+        <p class="muted">第 ${X.ply} 手 · 判和計數 ${X.quiet} / ${lim}</p>`;
     }
 
     function renderStatus() {
@@ -814,6 +911,12 @@
           head += ui.think.purpose === "move"
             ? `<div class="think-row">電腦思考中… <span class="think-sec">${sec}</span> 秒 <button type="button" class="small" data-act="thinkNow">立刻下</button></div>`
             : `<div class="think-row">AI 建議計算中… <span class="think-sec">${sec}</span> 秒 <button type="button" class="small" data-act="thinkNow">立刻給建議</button></div>`;
+        }
+        if (ui.advice && playing && ui.advice.state === "checking") {
+          head += `<div class="think-row">AI 檢查這一步… <button type="button" class="small" data-act="adviceGo">不等了，直接走</button></div>`;
+        } else if (ui.advice && playing && ui.advice.state === "warn") {
+          head += `<div class="advice-row"><b>AI 提醒：</b>${ui.advice.reason}。AI 會走 ${moveName(ui.advice.better)}（盤面已標出）。
+            <div class="row wrap"><button type="button" class="small primary" data-act="adviceGo">照走</button><button type="button" class="small" data-act="adviceCancel">取消</button></div></div>`;
         }
         const restartLabel = playing ? (Date.now() < ui.confirmUntil ? "再按一次確定" : "重新開始") : "再來一局";
         html = `${head}${quietTrack(S)}
@@ -899,6 +1002,20 @@
         const ms = app.querySelector('[data-act="mapSelect"]');
         if (ms) ms.disabled = locked;
       }
+      {
+        const locked = S.phase !== "deploy";
+        const on = $('[data-set="drawOn"]'), n = $('[data-set="drawN"]');
+        on.checked = setting.draw.on; n.value = String(setting.draw.n);
+        on.disabled = locked; n.disabled = locked || !setting.draw.on;
+        $(".set-draw-note").textContent = locked
+          ? `這盤：${LZ.drawLimit(S) ? `連續 ${LZ.drawLimit(S)} 手沒有對撞判和` : "不判和"}（開戰後鎖定；可在作弊介面改）`
+          : `預設 ${V.drawQuiet} 手`;
+        $('[data-set="adviceOn"]').checked = setting.advice.on;
+        $('[data-set="adviceAi"]').value = setting.advice.ai;
+        for (const b of app.querySelectorAll("[data-setv]")) b.classList.toggle("on", b.dataset.setv === `when:${setting.advice.when}`);
+        const cd = $('[data-act="cheatDraw"]');
+        if (cd && document.activeElement !== cd) cd.value = String(LZ.drawLimit(S));
+      }
       for (const b of app.querySelectorAll("[data-speed]")) b.classList.toggle("on", Number(b.dataset.speed) === ui.speed);
       const myTurn = !ui.replay && S.phase === "play" && S.turn === S.human && !ui.watch;
       app.querySelector('[data-act="autoMove"]').disabled = !myTurn || !!(ui.think && ui.think.purpose === "move");
@@ -934,6 +1051,7 @@
     function openReplay(rec) {
       clearTimeout(ui.aiTimer);
       cancelThink();
+      cancelAdvice();
       ui.watch = false;
       const total = LZ.recordSteps(rec).length;
       ui.replay = { rec, total, k: total, S: null };
@@ -999,6 +1117,13 @@
       if (!b || elPop.contains(b) || elModal.contains(b)) return;
       if (b.dataset.first != null) { ui.first = persist.first = Number(b.dataset.first); render(); return; }
       if (b.dataset.side) { ui.editSide = b.dataset.side; render(); return; }
+      if (b.dataset.setv) {
+        const [k, v] = b.dataset.setv.split(":");
+        setting.advice[k] = v;
+        saveSetting();
+        render();
+        return;
+      }
       if (b.dataset.speed) { ui.speed = persist.speed = Number(b.dataset.speed); render(); return; }
       const act = b.dataset.act;
       if (!act) return;
@@ -1058,6 +1183,16 @@
             scheduleAI();
           });
           return render();
+        case "adviceGo": {
+          const a = ui.advice;
+          if (!a) return;
+          cancelAdvice();
+          return commitMove(a.move.from, a.move.mv);
+        }
+        case "adviceCancel":
+          cancelAdvice();
+          ui.sel = null; ui.legal = [];
+          return render();
         case "thinkNow":
           if (ui.think) ui.think.handle.stop();
           return;
@@ -1083,6 +1218,7 @@
           if (!snap) return;
           clearTimeout(ui.aiTimer);
           cancelThink();
+          cancelAdvice();
           ui.watch = false;
           LZ.restore(S, snap);
           S.cheat.used = true;
@@ -1111,6 +1247,28 @@
 
     on(app, "change", (e) => {
       const el = e.target;
+      if (el.dataset.set) {
+        const k = el.dataset.set;
+        if (k === "drawOn") setting.draw.on = el.checked;
+        if (k === "drawN") setting.draw.n = Number(el.value);
+        if (k === "adviceOn") { setting.advice.on = el.checked; if (!el.checked) cancelAdvice(); }
+        if (k === "adviceAi") { setting.advice.ai = el.value; aiPanel.showAdvice(el.value === "own"); }
+        saveSetting();
+        if ((k === "drawOn" || k === "drawN") && S.phase === "deploy") S.drawQuiet = drawFromSetting();
+        return render();
+      }
+      if (el.dataset.act === "cheatDraw") {
+        const n = Number(el.value);
+        if (S.phase === "deploy") {
+          setting.draw = { on: n > 0, n: n > 0 ? n : setting.draw.n };
+          saveSetting();
+          S.drawQuiet = n;
+        } else {
+          LZ.cheatSetDraw(S, n);
+          if (S.phase === "play" && n && S.quiet >= n) LZ.endGame(S, -1, `連續 ${n} 步沒有對撞，和棋`);
+        }
+        return render();
+      }
       if (el.dataset.cheat) {
         const k = el.dataset.cheat;
         S.cheat[k] = el.checked;

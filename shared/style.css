@@ -367,3 +367,7 @@ ul.legend li { margin: 3px 0; }
 .ai-knob output { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .think-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; font-size: 14px; }
 .think-sec { font-variant-numeric: tabular-nums; min-width: 2.5em; display: inline-block; text-align: right; }
+.ai-limit select { min-width: 0; max-width: 100%; flex: 1; }
+.advice-row { margin: 6px 0; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 7px; font-size: 14px; }
+.advice-row .row { margin-top: 6px; }
+.settings-card .indent { margin-left: 24px; }

@@ -20,6 +20,7 @@
       cheatUsed: !!st.cheatUsed,
       grids: st.grids,
       map: st.map || undefined, // 擴充版：整張地圖存進棋譜，換台電腦也能複盤
+      drawQuiet: st.drawQuiet, // 和預設不同時才有（0＝不判和）
       moves: S.rec.slice(),
       result: S.phase === "end" ? { winner: S.winner, reason: S.endReason } : null,
     };
@@ -61,6 +62,7 @@
       }));
       LZ.setSideGrid(S, side, grid);
     }
+    if (rec.drawQuiet != null) S.drawQuiet = rec.drawQuiet;
     LZ.startPlay(S, rec.first);
     S.cheat.ignorePlacement = false;
     const list = steps(rec);
@@ -70,6 +72,7 @@
       else if (e.c === "del") LZ.cheatDelete(S, e.n);
       else if (e.c === "move") LZ.cheatMove(S, e.a, e.b);
       else if (e.c === "swap") LZ.swapSides(S);
+      else if (e.c === "draw") LZ.cheatSetDraw(S, e.n);
       else {
         S.cheat.infinite = !!e.inf;
         LZ.applyMove(S, e.f, { to: e.t, kind: e.k });

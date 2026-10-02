@@ -164,19 +164,34 @@
   }
 
   /** level：難度鍵（"hard"…），或一組設定 {noise, attack, danger, flag, smart}（AI 設置的細項） */
+  const FLAG_MODES = {
+    normal: { name: "正常", blurb: "會去奪旗" },
+    spare: { name: "不佔軍旗（放水）", blurb: "不撞可能是軍旗的棋；快輸時才奪旗" },
+    clear: { name: "清空可動棋", blurb: "不佔軍旗，目標改成吃光對方能動的棋；快輸時才奪旗" },
+  };
+
   function resolveBrain(V, level, style) {
     const base = level && typeof level === "object"
       ? Object.assign({ name: "自訂", noise: 0, attack: 1, danger: 0, flag: 1 }, level)
       : levelParams(V, level);
     const P = PERSONAS[style] || PERSONAS.balanced;
+    // 軍旗模式：normal 正常；spare 不佔對方軍旗（放水）；clear 不佔軍旗、吃光對方能動的棋（舊名 slaughter）
+    const fm = base.flagMode === "slaughter" ? "clear" : base.flagMode;
+    const flagMode = FLAG_MODES[fm] ? fm : "normal";
+    const slaughter = flagMode === "clear";
     return {
       levelKey: typeof level === "string" ? level : "custom",
+      flagMode,
+      noFlag: flagMode !== "normal",
+      slaughter,
+      // 放水：也不吃對方最後一顆能動的棋（不靠「無棋可動」贏），預設開
+      spareLast: flagMode === "spare" && base.spareLast !== false,
       levelName: base.name,
       styleName: P.name,
       styleBlurb: P.blurb,
       smart: !!base.smart,
       noise: base.noise * (P.noise ?? 1),
-      attack: base.attack * P.attack,
+      attack: base.attack * P.attack * (slaughter ? 1.3 : 1),
       danger: base.danger * P.danger,
       flag: base.flag * P.flag,
       push: P.push,
@@ -211,13 +226,13 @@
     const prev = omniscient;
     omniscient = !!opts.omniscient;
     try {
-      return scoreMovesInner(S, side, rng, L, opts.out || null);
+      return scoreMovesInner(S, side, rng, L, opts.out || null, !!opts.explain);
     } finally {
       omniscient = prev;
     }
   }
 
-  function scoreMovesInner(S, side, rng, L, out) {
+  function scoreMovesInner(S, side, rng, L, out, explain) {
     const V = S.V, B = S.board;
     const enemies = [];
     let flagHolders = 0;
@@ -305,6 +320,15 @@
     const pressureNow = boardPressure(null);
 
     let best = null, bestScore = -Infinity;
+    // 不佔軍旗時保留不走的手（撞可能的軍旗、放水時吃最後一顆能動的棋）：快輸時才用（避免輸優先）
+    let held = null, heldScore = -Infinity;
+    let lastMobile = -1;
+    if (L.spareLast) {
+      let cnt = 0;
+      for (const e of enemies) if (knownMask(B[e], side) & V.mobileMask) { cnt++; lastMobile = e; }
+      if (cnt !== 1) lastMobile = -1;
+    }
+    const why = explain ? {} : null;
     for (let from = 0; from < B.length; from++) {
       const p = B[from];
       if (!p || p.side !== side) continue;
@@ -313,6 +337,11 @@
       if (!moves.length) continue;
       const dangerFrom = dangerAt(from, MT, null);
       for (const mv of moves) {
+        // 不佔軍旗（放水／清空）：在我方眼中可能是軍旗的棋先不撞（不偷看，只看推理）；
+        // 放水時對方最後一顆能動的棋也先不吃。這些手照樣打分數，快輸時才拿出來用
+        const hold = L.noFlag && (mv.kind === "attack" || mv.kind === "snipe") &&
+          ((mv.kind === "attack" && knownMask(B[mv.to], side) & (1 << flagIdx)) || mv.to === lastMobile);
+        if (why) for (const k in why) delete why[k];
         let score = rng() * L.noise;
         if (mv.kind === "attack") {
           const dist = distOf(mv.to);
@@ -361,6 +390,25 @@
             const r = LZ.resolveAt(V, MT, T, mv.to);
             if (r === "win" || r === "flag") pWin += pr;
           }
+          // 清空可動棋：能移除「可能能動」的棋就加分，動過的（一定能動）加更多；吃不能動的棋不加分
+          if (L.slaughter) {
+            let pKill = 0;
+            for (const [T, pr] of dist) {
+              if (!T.mobile) continue;
+              const r = LZ.resolveAt(V, MT, T, mv.to);
+              if (r === "win" || r === "both") pKill += pr;
+            }
+            score += pKill * (B[mv.to].moved ? 18 : 12);
+          }
+          if (why) {
+            let pLose = 0, pMine = 0;
+            for (const [T, pr] of dist) {
+              const r = LZ.resolveAt(V, MT, T, mv.to);
+              if (r === "lose") pLose += pr;
+              if (T.kind === "mine") pMine += pr;
+            }
+            why.pLose = pLose; why.pMine = pMine;
+          }
           if (pWin > 0) {
             const saved = B[mv.to];
             B[mv.to] = p; B[from] = null;
@@ -372,8 +420,8 @@
             B[from] = p; B[mv.to] = saved;
           }
           score += dangerFrom * 0.5 * L.danger;
-          score += S.quiet > V.drawQuiet * 0.6 ? 10 : 0;
-          if (L.smart && V.nodes[mv.to].hq) {
+          score += LZ.drawLimit(S) && S.quiet > LZ.drawLimit(S) * 0.6 ? 10 : 0;
+          if (L.smart && !L.noFlag && V.nodes[mv.to].hq) {
             score += pOfKinds(dist, (T) => T.kind === "flag") * 45;
           }
         } else if (mv.kind === "scout") {
@@ -381,7 +429,7 @@
           let ev = 0;
           for (const [T, pr] of distOf(mv.to)) ev += pr * T.value;
           const amb = ambiguity(distOf(mv.to));
-          score += (6 + ev * 0.15 + (knownMask(q, side) & (1 << flagIdx) ? 40 : 0)) * L.scout;
+          score += (6 + ev * 0.15 + (!L.noFlag && knownMask(q, side) & (1 << flagIdx) ? 40 : 0)) * L.scout;
           // 最難：越糊的棋越值得偵察
           if (L.smart) score += (amb - 1) * 4 * L.scout;
           score -= dangerFrom * 0.6 * L.danger;
@@ -396,7 +444,7 @@
             score += pHit * FLAG_DANGER * L.flag;
           }
           score -= dangerFrom * 0.3 * L.danger;
-          score += S.quiet > V.drawQuiet * 0.6 ? 10 : 0;
+          score += LZ.drawLimit(S) && S.quiet > LZ.drawLimit(S) * 0.6 ? 10 : 0;
         } else if (mv.kind === "blow") {
           // 炸橋：對岸橋頭附近的敵棋越多越值得；炸彈本身快被吃時也值得
           let near = 0;
@@ -412,6 +460,7 @@
           const threatAfter = flagThreatened([from, mv.to]);
           const pressAfter = L.smart ? boardPressure([from, mv.to]) : 0;
           B[from] = p; B[mv.to] = null;
+          if (why) { why.danger = dTo; why.value = MT.value; why.flagAfter = threatAfter; why.flagNow = threatenedNow; }
           // 空降落地、走進森林或沼澤會翻倒一回合，逃不掉，危險加重
           const stunAfter = (mv.kind === "drop" && V.rule.dropStun) || (V.rule.forest && V.nodes[mv.to].forest)
             || (V.rule.swamp && V.nodes[mv.to].swamp);
@@ -449,15 +498,24 @@
           }
           if (lastBySide && lastBySide.to === from && lastBySide.from === mv.to) score -= 6;
           // 最難：工兵往對方後排（排雷／摸旗）略加分
-          if (L.smart && MT.kind === "engineer" && V.nodes[mv.to].side !== side) {
+          if (L.smart && !L.noFlag && MT.kind === "engineer" && V.nodes[mv.to].side !== side) {
             score += (V.nodes[mv.to].row >= V.rows - 3 ? 4 : 1.5);
           }
         }
         // 軍旗已被威脅時，偵察不能解圍；移動的情況已由 threatAfter 處理
         if (threatenedNow && mv.kind === "scout") score -= FLAG_DANGER * L.flag;
-        if (out) out.push({ from, mv, score });
+        if (hold) {
+          if (score > heldScore) { heldScore = score; held = { from, mv, score, held: true }; }
+          continue;
+        }
+        if (out) out.push(why ? { from, mv, score, why: Object.assign({}, why) } : { from, mv, score });
         if (score > bestScore) { bestScore = score; best = { from, mv, score }; }
       }
+    }
+    // 避免輸優先：沒別步可走，或最好的一步走完軍旗仍擋不住（分數含軍旗危險懲罰）時，改走保留的手
+    if (held && (!best || bestScore < -FLAG_DANGER * 0.5)) {
+      if (out) out.push(held);
+      return held;
     }
     return best;
   }
@@ -474,6 +532,7 @@
   Object.assign(LZ, {
     AI_LEVELS: LEVELS,
     AI_PERSONAS: PERSONAS,
+    AI_FLAG_MODES: FLAG_MODES,
     aiResolveBrain: resolveBrain,
     aiLevelParams: levelParams,
     aiScoreMoves: scoreMoves,

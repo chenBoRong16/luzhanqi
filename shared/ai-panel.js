@@ -10,7 +10,8 @@
   const PRESET_DEPTH = { easy: 1, medium: 1, hard: 2, hardest: 3 };
   const LIMITS = [5, 10, 15, 30, 60, 0]; // 0＝不限
   const DEFAULT_LIMIT = 15;
-  const WHO_NAME = { foe: "對手", me: "幫我下的電腦" };
+  const WHO_NAME = { foe: "對手", me: "幫我下的電腦", advice: "提醒用 AI" };
+  const WHOS = ["foe", "me", "advice"];
   /** 細項滑桿：鍵、名稱、範圍、說明 */
   const KNOBS = [
     { k: "noise", name: "隨機性", min: 0, max: 40, step: 0.5, tip: "越高越常走出意料之外（也越常失誤）" },
@@ -30,6 +31,8 @@
       noise: P.noise, attack: P.attack, danger: P.danger, flag: P.flag, smart: !!P.smart,
       style: keep.style || "balanced",
       limit: keep.limit != null ? keep.limit : DEFAULT_LIMIT,
+      flagMode: keep.flagMode || "normal",
+      spareLast: keep.spareLast !== false,
     };
   }
 
@@ -56,6 +59,9 @@
     s.smart = raw.smart != null ? !!raw.smart : base.smart;
     s.style = LZ.AI_PERSONAS && LZ.AI_PERSONAS[raw.style] ? raw.style : "balanced";
     s.limit = LIMITS.includes(raw.limit) ? raw.limit : DEFAULT_LIMIT;
+    const fm = raw.flagMode === "slaughter" ? "clear" : raw.flagMode; // 舊名
+    s.flagMode = LZ.AI_FLAG_MODES && LZ.AI_FLAG_MODES[fm] ? fm : "normal";
+    s.spareLast = raw.spareLast !== false;
     s.preset = matchPreset(V, s);
     return s;
   }
@@ -97,6 +103,10 @@
         <p class="muted ai-est"></p>
         <div class="sub-title">個性</div>
         <div class="seg wrap" data-group="style">${styles}</div>
+        <label class="ai-limit" title="放水：不撞可能是軍旗的棋；屠戮：專注吃子但不佔軍旗。不偷看，只依推理判斷哪些棋可能是軍旗">軍旗
+          <select data-ai="flagMode">${Object.entries(LZ.AI_FLAG_MODES || {}).map(([k, M]) => `<option value="${k}" title="${M.blurb}">${M.name}</option>`).join("")}</select>
+        </label>
+        <label class="check indent ai-spare-last"><input type="checkbox" data-ai="spareLast"> 也不讓對方無棋可動（不吃最後一顆能動的棋）</label>
         <label class="ai-limit">長考上限
           <select data-ai="limit">${LIMITS.map((v) => `<option value="${v}">${v ? `${v} 秒` : "不限"}</option>`).join("")}</select>
         </label>
@@ -115,13 +125,14 @@
   function mountAiPanel(container, V, opts = {}) {
     const KEY = `lzq-${V.key}-ai`;
     const saved = storageGet(KEY) || {};
-    const set = { foe: sanitize(V, saved.foe), me: sanitize(V, saved.me) };
-    const last = { foe: null, me: null };
-    container.innerHTML = sectionHtml("foe") + sectionHtml("me");
+    const set = { foe: sanitize(V, saved.foe), me: sanitize(V, saved.me), advice: sanitize(V, saved.advice) };
+    const last = { foe: null, me: null, advice: null };
+    container.innerHTML = WHOS.map(sectionHtml).join("");
+    container.querySelector('.ai-set[data-who="advice"]').hidden = true;
     const save = () => storageSet(KEY, set);
 
     function refresh() {
-      for (const who of ["foe", "me"]) {
+      for (const who of WHOS) {
         const s = set[who];
         const el = container.querySelector(`.ai-set[data-who="${who}"]`);
         s.preset = matchPreset(V, s);
@@ -143,6 +154,9 @@
         }
         el.querySelector(".ai-est").textContent = est;
         el.querySelector('[data-ai="limit"]').value = String(s.limit);
+        el.querySelector('[data-ai="flagMode"]').value = s.flagMode;
+        el.querySelector('input[data-ai="spareLast"]').checked = s.spareLast;
+        el.querySelector(".ai-spare-last").hidden = s.flagMode !== "spare";
         for (const { k } of KNOBS) {
           el.querySelector(`input[data-ai="${k}"]`).value = String(s[k]);
           el.querySelector(`[data-out="${k}"]`).textContent = String(+s[k].toFixed(2));
@@ -190,7 +204,14 @@
       if (!k) return;
       const who = el.closest(".ai-set").dataset.who;
       const s = set[who];
-      if (k === "limit") {
+      if (k === "flagMode") {
+        s.flagMode = el.value;
+        const M = LZ.AI_FLAG_MODES[s.flagMode];
+        tell(who, `軍旗：${M.name}（${M.blurb}）`);
+      } else if (k === "spareLast") {
+        s.spareLast = el.checked;
+        tell(who, `放水也不讓對方無棋可動：${s.spareLast ? "開" : "關"}`);
+      } else if (k === "limit") {
         s.limit = Number(el.value);
         tell(who, `長考上限：${s.limit ? `${s.limit} 秒` : "不限"}`);
       } else if (k === "smart") {
@@ -206,6 +227,8 @@
     return {
       get: (who) => Object.assign({}, set[who]),
       setLast(who, info) { last[who] = info; refresh(); },
+      /** 「提醒用 AI」選「另外設定」時才顯示這組 */
+      showAdvice(on) { container.querySelector('.ai-set[data-who="advice"]').hidden = !on; },
       refresh,
     };
   }
