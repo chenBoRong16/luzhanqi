@@ -32,6 +32,8 @@
     if (!d || d.format !== RECORD_FORMAT) return { error: "不是棋譜檔" };
     if (d.variant !== V.key) return { error: `這是「${d.variant}」的棋譜，不是本版的` };
     if (!Array.isArray(d.grids) || d.grids.length !== 2 || !Array.isArray(d.moves)) return { error: "棋譜內容不完整" };
+    // 大翻新前的棋譜沒有 v3：照舊規則重播
+    if (d.rules && !("v3" in d.rules)) d.rules = Object.assign({}, d.rules, { v3: false });
     return { rec: d };
   }
 

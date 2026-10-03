@@ -191,7 +191,7 @@
       styleBlurb: P.blurb,
       smart: !!base.smart,
       noise: base.noise * (P.noise ?? 1),
-      attack: base.attack * P.attack * (slaughter ? 1.3 : 1),
+      attack: base.attack * P.attack * (slaughter ? 1.5 : 1),
       danger: base.danger * P.danger,
       flag: base.flag * P.flag,
       push: P.push,
@@ -398,7 +398,7 @@
               const r = LZ.resolveAt(V, MT, T, mv.to);
               if (r === "win" || r === "both") pKill += pr;
             }
-            score += pKill * (B[mv.to].moved ? 18 : 12);
+            score += pKill * (B[mv.to].moved ? 35 : 25);
           }
           if (why) {
             let pLose = 0, pMine = 0;
@@ -445,6 +445,19 @@
           }
           score -= dangerFrom * 0.3 * L.danger;
           score += LZ.drawLimit(S) && S.quiet > LZ.drawLimit(S) * 0.6 ? 10 : 0;
+        } else if (mv.kind === "blast") {
+          // 爆破防護格：只有裡面有棋才值得（打開後才能攻擊它）；空的防護格炸了沒有用，還會讓工兵曝光。
+          // 工兵也是排雷的主力，所以扣掉工兵本身的價值與翻明後的危險
+          const q = B[mv.to];
+          let ev = -0.3 * MT.value;
+          if (q) {
+            for (const [T, pr] of distOf(mv.to)) ev += pr * T.value * 0.5;
+            if (V.nodes[mv.to].bunker) ev += 3;
+            // 清空可動棋：躲在防護格裡的棋要先炸開才吃得到
+            if (L.slaughter && knownMask(q, side) & V.mobileMask) ev += 20;
+          }
+          score += ev * L.attack;
+          score -= dangerFrom * 0.8 * L.danger;
         } else if (mv.kind === "blow") {
           // 炸橋：對岸橋頭附近的敵棋越多越值得；炸彈本身快被吃時也值得
           let near = 0;

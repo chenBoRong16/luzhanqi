@@ -39,7 +39,7 @@
       V: S.V, phase: S.phase, board, turn: S.turn, human: S.human, winner: S.winner, endReason: "",
       ply: S.ply, quiet: S.quiet, lastMove: S.lastMove, log: [], nextPid: S.nextPid,
       startGrids: S.startGrids, deadKnown: S.deadKnown.map((a) => a.slice()), lost: [[], []],
-      broken: S.broken.slice(), illegal: S.illegal, cheat: S.cheat, history: [], rec: [], recStart: null,
+      broken: S.broken.slice(), ruined: (S.ruined || []).slice(), illegal: S.illegal, cheat: S.cheat, history: [], rec: [], recStart: null,
       drawQuiet: S.drawQuiet, stats: LZ.newStats(), _fx: {}, lastMoves: S.lastMoves ? S.lastMoves.slice() : [null, null],
     };
   }

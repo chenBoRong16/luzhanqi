@@ -1,7 +1,7 @@
 /* 陸軍棋引擎：盤面、走法、對撞、資訊推理。三版共用，差異全在 config。
  * 擴充規則一律掛在 V.rule.xxx（規則開關）上；原版沒有規則表，V.rule 是空物件，行為和改版前完全相同
  * （tests/regress-classic.js 逐盤比對）。
- * 實體棋盤相容：規則狀態只有「位置、faceUp 明棋、stunned 翻倒、dropUsed 已空降、S.broken 斷橋、S.quiet 判和計數」。
+ * 實體棋盤相容：規則狀態只有「位置、faceUp 明棋、stunned 翻倒、dropUsed 已空降、S.broken 斷橋、S.ruined 已炸毀、S.quiet 判和計數」。
  * cand（推理）、rec（棋譜）、stats（統計）、cheat（作弊）屬於介面或紀錄，不是規則狀態。
  * 不用 ES module，讓 index.html 直接雙擊（file://）就能玩；Node 測試用 vm 載入。 */
 (function (root) {
@@ -14,7 +14,7 @@
   function resolveRules(cfg, rulesIn) {
     const defs = cfg.ruleDefs || [];
     const rule = {};
-    for (const d of defs) rule[d.id] = rulesIn && d.id in rulesIn ? !!rulesIn[d.id] : true;
+    for (const d of defs) rule[d.id] = rulesIn && d.id in rulesIn ? !!rulesIn[d.id] : d.def !== undefined ? d.def : true;
     if (defs.length && !rule.newArmy) for (const d of defs) if (d.piece) rule[d.id] = false;
     return rule;
   }
@@ -24,9 +24,14 @@
    * 擴充版一律走地圖（shared/map.js）：沒給地圖就用 config 換算的標準地圖，結果和舊建法逐項相同。
    * 原版沒有規則表，繼續用下面的固定參數建法。
    */
+  /** 擴充版的預設地圖：手工設計的標準地圖（maps-builtin.js）；沒載入時用 config 換算 */
+  function defaultMap(cfg) {
+    return LZ.standardMap ? LZ.standardMap(cfg.key) : LZ.mapFromConfig(cfg);
+  }
+
   function buildVariant(cfg, rulesIn, map) {
     const rule = resolveRules(cfg, rulesIn);
-    if ((cfg.ruleDefs || []).length && LZ.geometryFromMap) return buildFromMap(cfg, rule, map || LZ.mapFromConfig(cfg));
+    if ((cfg.ruleDefs || []).length && LZ.geometryFromMap) return buildFromMap(cfg, rule, map || defaultMap(cfg));
     const V = Object.assign({}, cfg);
     const { cols, rows } = cfg;
     V.cfg = cfg;
@@ -154,7 +159,12 @@
     const oldArmy = V.ruleDefs.length > 0 && !rule.newArmy;
     const pieces = cfg.pieces
       .filter((p) => !p.rule || rule[p.rule])
-      .map((p) => Object.assign({}, p, { count: oldArmy && p.countOld != null ? p.countOld : p.count }));
+      .map((p) => Object.assign({}, p, {
+        // 舊兵力用 countOld；大翻新前的新兵力用 countPreV3（工兵 4、連長 2、排長 2）
+        count: oldArmy && p.countOld != null ? p.countOld : V.ruleDefs.length && !rule.v3 && p.countPreV3 != null ? p.countPreV3 : p.count,
+        // 大翻新前的舊棋譜用舊等級表
+        rank: V.ruleDefs.length && !rule.v3 && p.rankOld != null ? p.rankOld : p.rank,
+      }));
     V.pieces = pieces;
     V.types = pieces.map((p, i) => Object.assign({ idx: i, mobile: true }, p));
     for (const T of V.types) {
@@ -194,6 +204,7 @@
     const isHQ = nd.hq;
     if (nd.mountain) return "高山不能放棋";
     if (isCamp) return "行營開局必須空著";
+    if (nd.swamp && V.rule.v3) return "沼澤開局不能放棋";
     if (nd.swamp && (T.kind === "tank" || T.kind === "mine" || T.kind === "flag" || T.kind === "radar")) {
       return `沼澤不能放${T.name}`;
     }
@@ -219,7 +230,7 @@
 
   /** 防守方實際比較的等級（碉堡加級） */
   function defRank(V, D, to) {
-    if (V.rule.bunker && to != null && V.nodes[to].bunker && rankedKind(D)) return V.rankUp[D.idx];
+    if (V.rule.bunker && !V.rule.v3 && to != null && V.nodes[to].bunker && rankedKind(D)) return V.rankUp[D.idx];
     return D.rank;
   }
 
@@ -233,11 +244,16 @@
     if (A.kind === "bomb" || D.kind === "bomb") return "both";
     if (D.kind === "mine") {
       if (A.kind === "engineer") return "win";
-      if (A.kind === "tank") return R.tankMine ? "win" : "both";
+      // 坦克：大翻新後和一般棋一樣撞雷就移除；隱藏開關 tankMine（舊棋譜、實驗用）開著時坦克破雷
+      if (A.kind === "tank" && R.tankMine) return "win";
+      if (A.kind === "tank" && !R.v3) return "both";
       return "lose";
     }
-    if (D.kind === "radar") return "win";
-    if (D.kind === "aa" && A.kind === "para") return "lose";
+    if (!R.v3) {
+      // 大翻新前的特例（舊棋譜用）；大翻新後由等級比較得到相同結果
+      if (D.kind === "radar") return "win";
+      if (D.kind === "aa" && A.kind === "para") return "lose";
+    }
     if (A.kind === "spy" && D.kind === "commander") return "win";
     const dr = defRank(V, D, to);
     if (A.rank > dr) return "win";
@@ -253,7 +269,7 @@
   /** 狙擊是否命中：目標實際等級比營長小；炸彈、地雷、軍旗一律不中 */
   function snipeHits(V, D, to) {
     if (D.kind === "bomb" || D.kind === "mine" || D.kind === "flag") return false;
-    return defRank(V, D, to) < V.snipeRank;
+    return (V.rule.v3 ? D.rank : defRank(V, D, to)) < V.snipeRank;
   }
 
   // ---------- 遊戲狀態 ----------
@@ -264,6 +280,7 @@
       kills: [{}, {}], drop: pair(), scout: pair(), snipe: pair(), snipeHit: pair(), blow: pair(),
       bunkerDef: pair(), forest: pair(), radar: pair(), tank2: pair(),
       swamp: pair(), village: pair(), tank3: pair(), narrow: pair(), gaugeStop: pair(),
+      blast: pair(), hqEnter: pair(), hqExit: pair(),
     };
   }
 
@@ -285,6 +302,7 @@
       deadKnown: [new Array(V.types.length).fill(0), new Array(V.types.length).fill(0)],
       lost: [[], []], // 各方被移除的棋（棋種 idx），供統計
       broken: [], // 斷掉的橋（欄號）
+      ruined: [], // 被工兵爆破的防護格（格子編號）
       illegal: [false, false], // 該方開局用了違規佈局（無視佈局條件）
       cheat: {
         infinite: false, reveal: false, feed: false, add: false, del: false, drag: false,
@@ -382,6 +400,7 @@
     S.history = [];
     S.rec = [];
     S.stats = newStats();
+    S.ruined = [];
     S.recStart = {
       first, human: S.human, rules: Object.assign({}, V.rule), illegal: S.illegal.slice(), cheatUsed: S.cheat.used,
       map: V.map || null,
@@ -395,6 +414,16 @@
   }
 
   // ---------- 走法 ----------
+
+  /**
+   * 防護格：裡面的棋不能被攻擊。原版、舊規則：行營。大翻新後：行營、碉堡，被工兵爆破過的除外。
+   */
+  function isProtected(S, n) {
+    const V = S.V, nd = V.nodes[n], R = V.rule;
+    if (!R.v3) return !!nd.camp;
+    if (!(nd.camp || (R.bunker && nd.bunker))) return false;
+    return !(S.ruined && S.ruined.includes(n));
+  }
 
   /** 公路鄰居（略過斷掉的橋） */
   function roadNbrs(S, n) {
@@ -426,9 +455,14 @@
   function movesFor(S, from, T, side, dropUsed) {
     const V = S.V, B = S.board, R = V.rule;
     const out = [];
-    if (!T.mobile || V.nodes[from].hq) return out;
+    if (!T.mobile) return out;
+    // 大本營：大翻新後任何棋都能走出來（開關「棋可以走出大本營」）；否則進了就不能動
+    if (V.nodes[from].hq && !(R.v3 && R.hqExit)) return out;
     const seen = new Set();
     const add = (to, kind) => { if (!seen.has(to)) { seen.add(to); out.push({ to, kind }); } };
+    // 工兵爆破：攻擊得到的、對方半場沒被炸毀的防護格（空的也可以）
+    const blastTo = [];
+    const canBlast = T.kind === "engineer" && R.v3 && R.blast;
     // 沼澤：坦克進不去（含攻擊沼澤裡的棋）；炸彈是步兵背的炸藥，可以進去
     const swampBan = R.swamp && T.kind === "tank";
     // 坦克走兩格時，中間那格除了要空，也不能是沼澤或森林（整段路要暢通）
@@ -437,8 +471,9 @@
     const consider = (to) => {
       if (swampBan && V.nodes[to].swamp) return false;
       const q = B[to];
+      if (canBlast && V.nodes[to].side !== side && isProtected(S, to) && (!q || q.side !== side) && !blastTo.includes(to)) blastTo.push(to);
       if (!q) { add(to, "move"); return true; }
-      if (q.side !== side && !V.nodes[to].camp) add(to, "attack");
+      if (q.side !== side && !isProtected(S, to)) add(to, "attack");
       return false;
     };
     // 村莊：從村莊出發，這一手只能走公路一格（不上鐵路、坦克不衝、不空降）
@@ -566,8 +601,9 @@
       for (const nd of V.nodes) {
         if (nd.side === side || nd.row >= V.dropRows || nd.camp || nd.hq || nd.mountain) continue;
         if (blocked && blocked.has(nd.id)) continue;
-        // 沼澤、村莊不能空降
+        // 沼澤、村莊不能空降；大翻新後只能落在一般格或平原
         if ((R.swamp && nd.swamp) || (R.village && nd.village)) continue;
+        if (R.v3 && (nd.forest || nd.bunker)) continue;
         if (!B[nd.id] && !seen.has(nd.id)) { seen.add(nd.id); out.push({ to: nd.id, kind: "drop" }); }
       }
     }
@@ -603,11 +639,13 @@
         if (k < 0) continue;
         const q = B[k];
         // 行營、森林、村莊裡的棋不能當目標（建築物、樹林擋住視線）
-        if (q && q.side !== side && !V.nodes[k].camp && !(R.forest && V.nodes[k].forest) && !(R.village && V.nodes[k].village)) {
+        if (q && q.side !== side && !isProtected(S, k) && !(R.forest && V.nodes[k].forest) && !(R.village && V.nodes[k].village)) {
           out.push({ to: k, kind: "snipe" });
         }
       }
     }
+
+    for (const to of blastTo) out.push({ to, kind: "blast" });
 
     if (T.kind === "bomb" && R.bridgeBlow) {
       const a = V.nodes[from];
@@ -809,6 +847,11 @@
         ev.stun = "swamp";
       }
       if (R.village && V.nodes[to].village) S.stats.village[p.side]++;
+      // 攻進對方大本營，行蹤曝光
+      if (R.v3 && R.hqExit && V.nodes[to].hq && V.nodes[to].side !== p.side) {
+        if (V.boardMode) reveal(p); else p.cand[opp] = 1 << p.t;
+        S.stats.hqEnter[p.side]++;
+      }
     };
 
     if (mv.kind === "scout") {
@@ -821,6 +864,7 @@
       S.quiet++;
     } else if (mv.kind === "move" || mv.kind === "drop") {
       if (mv.kind === "move") {
+        if (V.nodes[from].hq) S.stats.hqExit[p.side]++;
         revealByMovement(S, from, mv.to, p);
         terrainMoveStats(S, from, mv.to, p, ev);
       }
@@ -855,6 +899,15 @@
       } else {
         S.quiet++;
       }
+    } else if (mv.kind === "blast") {
+      // 工兵爆破防護格：這格失去防護；工兵翻成明棋；裡面的棋不動
+      if (!S.ruined) S.ruined = [];
+      S.ruined.push(mv.to);
+      if (V.boardMode) reveal(p); else p.cand[opp] = 1 << p.t;
+      S.stats.blast[p.side]++;
+      S._fx.blast = true;
+      S.log.push(`${who}工兵爆破${V.nodes[mv.to].bunker ? "碉堡" : "行營"}`);
+      S.quiet++;
     } else if (mv.kind === "blow") {
       const col = V.nodes[from].col;
       S.broken.push(col);
@@ -965,7 +1018,7 @@
       board: S.board, turn: S.turn, ply: S.ply, quiet: S.quiet, lastMove: S.lastMove,
       phase: S.phase, winner: S.winner, endReason: S.endReason, nextPid: S.nextPid,
       deadKnown: S.deadKnown, lost: S.lost, logLen: S.log.length,
-      broken: S.broken, stats: S.stats, recLen: S.rec.length,
+      broken: S.broken, ruined: S.ruined || [], stats: S.stats, recLen: S.rec.length,
     });
   }
 
@@ -974,7 +1027,7 @@
     S.board = o.board; S.turn = o.turn; S.ply = o.ply; S.quiet = o.quiet;
     S.lastMove = o.lastMove; S.phase = o.phase; S.winner = o.winner;
     S.endReason = o.endReason; S.nextPid = o.nextPid; S.deadKnown = o.deadKnown; S.lost = o.lost;
-    S.broken = o.broken || []; S.stats = o.stats || newStats();
+    S.broken = o.broken || []; S.ruined = o.ruined || []; S.stats = o.stats || newStats();
     S.log.length = Math.min(S.log.length, o.logLen);
     S.rec.length = Math.min(S.rec.length, o.recLen || 0);
   }
@@ -1048,6 +1101,6 @@
     resolveRules, buildVariant, placementError, originMask, resolve, resolveAt, defRank, snipeHits,
     rankedKind, newGame, makePiece, setSideGrid, sideGrid, validateSide, startPlay, movesFor, legalMoves,
     hasAnyMove, applyMove, popcount, singleType, snapshot, restore, swapSides, cheatAdd, cheatDelete,
-    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, namesGrid, newStats, drawLimit, cheatSetDraw,
+    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, namesGrid, newStats, drawLimit, cheatSetDraw, isProtected,
   });
 })(typeof window !== "undefined" ? window : globalThis);

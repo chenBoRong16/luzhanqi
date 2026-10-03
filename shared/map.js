@@ -338,7 +338,6 @@
         if ([...line].length !== cols) { err(`第 ${s + 1} 方第 ${r + 1} 列格數不對`); return errs; }
         [...line].forEach((ch, c) => {
           if (!(ch in TERRAIN)) err(`不認得的地形「${ch}」`, [[s, c, r]]);
-          if (ch === "堡" && level < 1) err("碉堡只有擴充版-1 能用", [[s, c, r]]);
         });
       }
     }

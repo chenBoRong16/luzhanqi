@@ -143,6 +143,11 @@
     } else if (kind === "blow") {
       noiseBurst(t, 0.35, 0.22);
       tone(90, t, 0.4, "sawtooth", 0.12, 40);
+    } else if (kind === "blast") {
+      // 工兵爆破：短促的兩聲爆炸
+      noiseBurst(t, 0.2, 0.18);
+      tone(120, t, 0.25, "sawtooth", 0.1, 50);
+      noiseBurst(t + 0.18, 0.15, 0.12);
     } else {
       tone(320, t, 0.07, "triangle", 0.07);
       tone(240, t + 0.05, 0.08, "triangle", 0.05);

@@ -3,14 +3,14 @@
   "variant": "expanded1",
   "name": "擴充版-1預設",
   "說明": "grid 每列 7 格，第一列是前線（靠中間），最後一列是大本營那排；空字串是空格（行營開局必須空著）。棋名可用繁體或簡體",
-  "rules": {"newArmy":true,"tankMine":true,"dropStun":true,"tankTurn":true,"scout2":true,"aa":true,"radar":true,"forest":true,"bridgeBlow":true,"bunker":true,"sniper":true},
+  "rules": {"v3":true,"newArmy":true,"aa":true,"radar":true,"sniper":true,"forest":true,"swamp":true,"plain":true,"village":true,"bunker":true,"gauge":true,"blast":true,"hqExit":true,"tankTurn":true,"scout2":true,"dropStun":true,"bridgeBlow":true,"tankMine":false},
   "grid": [
-    ["營長","排長","狙擊手","工兵","連長","連長","團長"],
+    ["營長","排長","狙擊手","工兵","工兵","連長","團長"],
     ["旅長","","防空炮","師長","營長","","坦克"],
     ["司令","團長","","軍長","","傘兵","師長"],
     ["炸彈","","炸彈","","雷達站","","炸彈"],
     ["偵察","傘兵","","旅長","","",""],
-    ["","間諜","地雷","排長","地雷","坦克","偵察"],
+    ["","間諜","地雷","工兵","地雷","坦克","偵察"],
     ["工兵","地雷","軍旗","地雷","","工兵","工兵"]
   ]
 }

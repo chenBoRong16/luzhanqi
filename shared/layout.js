@@ -42,9 +42,13 @@
     return r;
   }
 
-  function sameRules(V, rules) {
+  /**
+   * 規則組是否相同。opts.pieceOnly：只比會改變兵力的開關（佈局檔只跟「有哪些棋」有關）。
+   */
+  function sameRules(V, rules, opts = {}) {
     const norm = LZ.resolveRules(V.cfg || V, rules);
-    return (V.ruleDefs || []).every((d) => !!norm[d.id] === !!V.rule[d.id]);
+    const defs = (V.ruleDefs || []).filter((d) => !opts.pieceOnly || d.piece || d.id === "newArmy");
+    return defs.every((d) => !!norm[d.id] === !!V.rule[d.id]);
   }
 
   /** 把檔案的 grid 轉成引擎 grid，並檢查格式（棋數規則另由 validateGrid 檢查） */
@@ -98,7 +102,7 @@
     let rules = null;
     if (V.ruleDefs && V.ruleDefs.length) {
       rules = data.rules && typeof data.rules === "object" ? data.rules : legacyRules(V);
-      if (!sameRules(V, rules)) return { name: data.name || "", rules, illegal: !!data.illegal, rulesMismatch: true };
+      if (!sameRules(V, rules, { pieceOnly: true })) return { name: data.name || "", rules, illegal: !!data.illegal, rulesMismatch: true };
     }
     // 地圖：檔案沒寫就是標準地圖；和目前不同時先回報，讓介面切換地圖後再讀一次
     if (V.map) {
@@ -147,7 +151,7 @@
   /** 這一版的標準地圖雜湊（舊檔沒寫地圖時，就是用標準地圖） */
   function standardHash(V) {
     if (!V.cfg || !LZ.mapFromConfig) return null;
-    if (!V.cfg._stdHash) V.cfg._stdHash = LZ.mapHash(LZ.mapFromConfig(V.cfg));
+    if (!V.cfg._stdHash) V.cfg._stdHash = LZ.mapHash(LZ.standardMap ? LZ.standardMap(V.cfg.key) : LZ.mapFromConfig(V.cfg));
     return V.cfg._stdHash;
   }
 

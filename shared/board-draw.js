@@ -126,12 +126,13 @@
 
   /** 地形圖例（只列這張地圖有、且規則開著的地形）：圖示、規則、一句現實理由 */
   const LEGEND = [
-    { key: "forest", name: "森林", sym: "樹", rule: "走到森林的棋翻倒。森林裡的棋不能被偵察，雷達也看不到", why: "樹林好藏身，但難走" },
-    { key: "swamp", name: "沼澤", sym: "波浪紋", rule: "走到沼澤的棋翻倒。坦克不能進入、不能攻擊沼澤裡的棋，連走時也不能經過。不能空降，不能鋪鐵路", why: "坦克太重會陷住；泥地無法著陸、鋪軌" },
-    { key: "plain", name: "平原", sym: "點狀紋", rule: "坦克在平原上可以連走 3 格（前 2 格要空）。敵棋站在平原上時，偵察從 3 步遠、雷達從 2 步遠就看得到", why: "開闊地適合裝甲推進，但也無處躲藏" },
-    { key: "village", name: "村莊", sym: "小房子", rule: "村莊裡的棋不能被偵察，雷達也看不到。不能空降。從村莊出發的棋這一手只能沿公路走 1 格", why: "建築遮蔽視線，巷弄出不快" },
-    { key: "mountain", name: "高山", sym: "山形", rule: "不能進入", why: "天然屏障" },
-    { key: "bunker", name: "碉堡", sym: "城垛方框", rule: "站在上面的棋被攻擊時，等級算高一級", why: "堅固工事" },
+    { key: "forest", name: "森林", sym: "樹", rule: "隱蔽：看不到（不能偵察、狙擊，雷達看不到）。走進去翻倒；坦克衝刺不能經過", why: "樹林好藏身，但難走" },
+    { key: "swamp", name: "沼澤", sym: "波浪紋", rule: "走進去翻倒；坦克不能進入；不能空降；開局不能放棋；不能鋪鐵路", why: "坦克太重會陷住；泥地無法著陸、鋪軌" },
+    { key: "plain", name: "平原", sym: "點狀紋", rule: "暴露：站在上面的棋，偵察、雷達的距離多 1。坦克整段在平原上可以衝刺 3 格", why: "開闊地適合裝甲推進，但也無處躲藏" },
+    { key: "village", name: "村莊", sym: "小房子", rule: "隱蔽：看不到。不能空降。從村莊出發只能沿公路走 1 格", why: "建築遮蔽視線，巷弄出不快" },
+    { key: "mountain", name: "高山", sym: "山形", rule: "不能進入，不能放棋", why: "天然屏障" },
+    { key: "camp", name: "行營", sym: "圓", rule: "防護格：裡面的棋打不到，工兵可以爆破；開局空著；可以斜走", why: "營地有壕溝擋步兵" },
+    { key: "bunker", name: "碉堡", sym: "城垛方框", rule: "防護格：裡面的棋打不到，工兵可以爆破；開局可以放棋", why: "堅固工事" },
     { key: "narrow", name: "窄軌", sym: "細線、密枕木", rule: "一手最多走 3 格；任何棋都可以順著窄軌轉彎；坦克不能走", why: "窄軌載重小、彎道多" },
     { key: "wide", name: "寬軌", sym: "雙線", rule: "和標準軌一樣，只是軌距不同", why: "部分國家用寬軌，跨國要換軌" },
     { key: "gaugeBreak", name: "換軌站", sym: "菱形框", rule: "沿鐵路走到這裡就要停下，工兵也一樣；下一手才能走另一種軌距", why: "軌距不同，車廂過不去，要換車" },
@@ -143,6 +144,8 @@
       village: V.nodes.some((n) => n.village), mountain: V.nodes.some((n) => n.mountain), bunker: V.nodes.some((n) => n.bunker),
       narrow: (V.lineGauge || []).includes("narrow"), wide: (V.lineGauge || []).includes("wide"),
       gaugeBreak: V.nodes.some((n) => n.gaugeBreak),
+      // 行營：大翻新後是防護格（可爆破），和原版不同，列進圖例
+      camp: !!(V.rule && V.rule.v3) && V.nodes.some((n) => n.camp),
     };
     return LEGEND.filter((e) => has[e.key]);
   }

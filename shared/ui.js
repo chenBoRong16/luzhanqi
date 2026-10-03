@@ -3,7 +3,7 @@
   "use strict";
   const LZ = root.LZ;
 
-  const ACTION_LABEL = { attack: "攻擊", scout: "偵察", move: "移動", drop: "空降", snipe: "狙擊", blow: "炸橋" };
+  const ACTION_LABEL = { attack: "攻擊", scout: "偵察", move: "移動", drop: "空降", snipe: "狙擊", blow: "炸橋", blast: "爆破" };
 
   // 重新掛載（例如切換規則組）時保留的介面設定
   const persist = {
@@ -88,7 +88,10 @@
           <details class="card rules-card">
             <summary>規則開關</summary>
             <p class="muted">佈陣階段可以改；改了會重新開局。開戰後鎖定。</p>
-            ${V.ruleDefs.map((d) => `<label class="check" title="${d.desc}"><input type="checkbox" data-rule="${d.id}"> ${d.name}</label>`).join("")}
+            ${["新棋", "地形", "機制"].map((g) => {
+              const defs = V.ruleDefs.filter((d) => !d.hidden && (d.group || "機制") === g);
+              return defs.length ? `<div class="sub-title">${g}</div>` + defs.map((d) => `<label class="check" title="${d.desc}"><input type="checkbox" data-rule="${d.id}"> ${d.name}</label>`).join("") : "";
+            }).join("")}
             <div class="row wrap"><button type="button" class="small" data-act="rulesAll">全開（預設）</button><button type="button" class="small" data-act="rulesLegacy">改版前規則</button></div>
           </details>` : "";
 
@@ -776,6 +779,8 @@
         const cls = ["cell"];
         if (nd.camp) cls.push("camp");
         if (nd.hq) cls.push("hq");
+        // 被工兵爆破的防護格（行營、碉堡）：畫成破損樣式
+        if (X.ruined && X.ruined.includes(n)) cls.push("ruined");
         if (!ui.replay && ui.sel === n) cls.push("sel");
         if (targets.has(n)) cls.push(...targets.get(n).split(" ").map((k) => "t-" + k));
         if (deployOk && deployOk.has(n)) cls.push("t-deploy");
@@ -1493,7 +1498,13 @@
     function applyImport(text, foe, both, fMsg) {
       const parsed = LZ.parseFile(V, text);
       if (parsed.error) { fMsg.textContent = parsed.error; return; }
-      if (parsed.rulesMismatch) return offerRuleSwitch(fMsg, parsed.rules, { kind: "layout", text, foe, both });
+      if (parsed.rulesMismatch) {
+        // 佈局只跟兵力有關：只換兵力相關的開關，其他照目前的規則
+        const merged = Object.assign({}, V.rule);
+        const norm = LZ.resolveRules(CFG, parsed.rules);
+        for (const d of V.ruleDefs) if (d.piece || d.id === "newArmy") merged[d.id] = norm[d.id];
+        return offerRuleSwitch(fMsg, merged, { kind: "layout", text, foe, both });
+      }
       if (parsed.mapMismatch) return offerMapSwitch(fMsg, parsed.map, null, { kind: "layout", text, foe, both });
       const loose = !!S.cheat.ignorePlacement;
       const check = (g, side) => LZ.validateGrid(V, g, true, loose, side);

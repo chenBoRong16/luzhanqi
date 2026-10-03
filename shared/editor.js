@@ -7,7 +7,7 @@
   const TERRAIN_TOOLS = [
     { ch: ".", name: "一般" }, { ch: "營", name: "行營" }, { ch: "本", name: "大本營" },
     { ch: "原", name: "平原" }, { ch: "村", name: "村莊" }, { ch: "林", name: "森林" },
-    { ch: "沼", name: "沼澤" }, { ch: "山", name: "高山" }, { ch: "堡", name: "碉堡", level: 1 },
+    { ch: "沼", name: "沼澤" }, { ch: "山", name: "高山" }, { ch: "堡", name: "碉堡" },
   ];
   const BRUSHES = [
     { kind: "plain", name: "偏遠平原" }, { kind: "village", name: "鄉村" }, { kind: "swamp", name: "沼澤地帶" },
