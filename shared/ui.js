@@ -1235,7 +1235,10 @@
           LZ.setSideGrid(S, 1 - S.human, LZ.randomGrid(V, Math.random, 1 - S.human));
           S.log.push("【作弊】電腦換了一個隨機佈局");
           return render();
-        case "replay": return openReplay(LZ.buildRecord(S, "這盤"));
+        case "replay":
+          openReplay(LZ.buildRecord(S, "這盤"));
+          ui.replay.fromGame = true;
+          return;
         case "replayExit": return closeReplay();
         case "exportRec": return openExportRecord();
         case "importRec": return openImportRecord();
@@ -1361,11 +1364,17 @@
     }
     const safeName = (s, d) => (s.trim() || d).replace(/[\\/:*?"<>|]/g, "_");
 
-    function textModal({ title, note, name, build, extra = "" }) {
+    /**
+     * needsCheat()：回傳 true 時，內容會讓你看到電腦的佈局（對局還沒結束）。
+     * 先不顯示，按「我知道，算作弊並顯示」才標記用過作弊並顯示。
+     */
+    function textModal({ title, note, name, build, extra = "", needsCheat = null }) {
       openModal(`<h2>${title}</h2>
         <p class="muted">${note}</p>
         <label class="field">名稱 <input type="text" data-f="name" value="${name}" maxlength="40"></label>
         ${extra}
+        <div class="flash" data-f="cheatGate" hidden>內容含電腦的佈局，對局還沒結束：看了算作弊（這盤會標記用過作弊）。
+          <div class="row"><button type="button" class="small" data-do="cheatOk">我知道，算作弊並顯示</button></div></div>
         <textarea data-f="text" readonly rows="12"></textarea>
         <div class="row end">
           <span class="muted" data-f="msg"></span>
@@ -1376,7 +1385,22 @@
       const fName = elModal.querySelector('[data-f="name"]');
       const fText = elModal.querySelector('[data-f="text"]');
       const fMsg = elModal.querySelector('[data-f="msg"]');
-      const refresh = () => { fText.value = build(fName.value.trim()); };
+      const fGate = elModal.querySelector('[data-f="cheatGate"]');
+      let cheatOk = false;
+      const refresh = () => {
+        const gated = needsCheat && needsCheat() && !cheatOk;
+        fGate.hidden = !gated;
+        fText.hidden = gated;
+        for (const b of elModal.querySelectorAll('[data-do="copy"],[data-do="download"]')) b.disabled = gated;
+        fText.value = gated ? "" : build(fName.value.trim());
+      };
+      elModal.querySelector('[data-do="cheatOk"]').addEventListener("click", () => {
+        cheatOk = true;
+        S.cheat.used = true;
+        S.log.push("【作弊】匯出時看到電腦的佈局");
+        refresh();
+        render();
+      });
       refresh();
       fName.addEventListener("input", refresh);
       for (const el of elModal.querySelectorAll("[data-f-opt]")) el.addEventListener("change", refresh);
@@ -1398,6 +1422,8 @@
         note: S.phase === "deploy" ? "匯出目前的佈陣。" : "匯出這盤開局時的佈陣。",
         name: "我的佈局",
         extra: `<label class="check"><input type="checkbox" data-f-opt="both"> 連同電腦的佈局一起匯出（會看到電腦怎麼擺）</label>`,
+        // 對局結束前連同電腦的佈局一起匯出＝看到電腦怎麼擺，算作弊
+        needsCheat: () => S.phase !== "end" && elModal.querySelector('[data-f-opt="both"]').checked,
         build: (name) => {
           const both = elModal.querySelector('[data-f-opt="both"]').checked;
           const illegal = !!LZ.validateGrid(V, myGrid, true, false, S.human) || (both && !!LZ.validateGrid(V, foeGrid, true, false, 1 - S.human));
@@ -1412,6 +1438,8 @@
         title: "匯出棋譜",
         note: "包含雙方開局佈局、規則組、每一手（含作弊動作）。匯入後可以複盤。",
         name: base ? base.name || "對局" : "對局",
+        // 這一盤還沒結束時，棋譜裡有電腦的開局佈局：算作弊（匯入的棋譜不算）
+        needsCheat: () => S.phase !== "end" && (!base || (ui.replay && ui.replay.fromGame)),
         build: (name) => JSON.stringify(base ? Object.assign({}, base, { name }) : LZ.buildRecord(S, name)),
       });
     }

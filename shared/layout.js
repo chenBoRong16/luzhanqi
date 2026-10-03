@@ -166,10 +166,17 @@
       return randomGrid(V, rng, side);
     }
     const src = V.ruleDefs && V.ruleDefs.length && !V.rule.newArmy ? V.defaultLayoutOld : V.defaultLayout;
-    return src.map((line) => line.map((n) => {
+    const grid = src.map((line) => line.map((n) => {
       const t = nameToIdx(V, n);
       return t === undefined ? -1 : t;
     }));
+    // 預設佈局在目前規則下不合法（例如關掉「大翻新後的規則」，兵力數量不同）：改用固定種子的合法隨機佈局
+    if (validateGrid(V, grid, true, false, side)) {
+      let seed = 20261003;
+      const rng = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 4294967296; };
+      return randomGrid(V, rng, side);
+    }
+    return grid;
   }
 
   // ---------- 隨機佈局（電腦開局用） ----------

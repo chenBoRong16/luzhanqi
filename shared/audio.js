@@ -233,7 +233,8 @@
     } else if (ev.kind === "snipe") {
       playCombat(flipResult(ev.result === "win" ? "win" : "miss"));
     } else {
-      playMove(ev.kind);
+      if (ev.shotDown) playCombat(flipResult("lose")); // 傘兵被擊落
+      else playMove(ev.kind);
     }
     playExtras(ev);
   }

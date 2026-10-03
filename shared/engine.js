@@ -280,7 +280,7 @@
       kills: [{}, {}], drop: pair(), scout: pair(), snipe: pair(), snipeHit: pair(), blow: pair(),
       bunkerDef: pair(), forest: pair(), radar: pair(), tank2: pair(),
       swamp: pair(), village: pair(), tank3: pair(), narrow: pair(), gaugeStop: pair(),
-      blast: pair(), hqEnter: pair(), hqExit: pair(),
+      blast: pair(), hqEnter: pair(), hqExit: pair(), dropShot: pair(),
     };
   }
 
@@ -591,7 +591,8 @@
     if (T.kind === "para" && !dropUsed && !villageStart) {
       // 防空：對方防空炮相鄰的格子不能空降
       let blocked = null;
-      if (R.aa) {
+      // 舊規則：防空炮旁的格子直接不能選（會洩漏防空炮的位置）；大翻新後改成落地時判定擊落
+      if (R.aa && !R.v3) {
         blocked = new Set();
         for (let n = 0; n < B.length; n++) {
           const q = B[n];
@@ -876,12 +877,26 @@
         p.dropUsed = true;
         if (V.boardMode) reveal(p);
         else p.cand[opp] = 1 << p.t;
-        if (R.dropStun) p.stunned = true;
         S.stats.drop[p.side]++;
-        S.log.push(`${who}傘兵空降`);
+        // 落點和對方防空炮公路相鄰：傘兵被擊落，防空炮開火暴露位置（翻成明棋）
+        const aaAt = R.aa && R.v3 ? V.adj[mv.to].find((m) => B[m] && B[m].side === opp && V.types[B[m].t].kind === "aa") : undefined;
+        if (aaAt !== undefined) {
+          reveal(B[aaAt]);
+          removePiece(S, mv.to, opp);
+          S.stats.dropShot[opp]++;
+          ev.shotDown = true;
+          ev.result = "lose";
+          S.log.push(`${who}傘兵空降，被防空炮擊落`);
+          S.quiet = 0;
+        } else {
+          if (R.dropStun) p.stunned = true;
+          S.log.push(`${who}傘兵空降`);
+        }
       }
-      enter(mv.to);
-      S.quiet++;
+      if (!ev.shotDown) {
+        enter(mv.to);
+        S.quiet++;
+      }
     } else if (mv.kind === "snipe") {
       const q = B[mv.to];
       const D = V.types[q.t];

@@ -498,7 +498,18 @@
           if (V.rule.village && V.nodes[mv.to].village && MT.value >= 35 && dangerFrom > 0 && !V.nodes[from].village) score += 2 * L.camp;
           if (V.nodes[from].camp) score -= 1.5 * L.camp;
           if (V.nodes[mv.to].hq && V.nodes[mv.to].side === side) score -= 40;
-          if (mv.kind === "drop") score += 3 * L.drop;
+          if (mv.kind === "drop") {
+            score += 3 * L.drop;
+            // 落點旁可能有防空炮就會被擊落：依推理估機率（明棋的防空炮＝1）
+            if (V.rule.aa && V.rule.v3) {
+              let pAA = 0;
+              for (const m of V.adj[mv.to]) {
+                const q = B[m];
+                if (q && q.side !== side) pAA += pOfKinds(distOf(m), (T) => T.kind === "aa");
+              }
+              score -= Math.min(1, pAA) * (MT.value + 15);
+            }
+          }
           // 炸彈守橋頭：橋還在、對岸有敵棋時，走到橋頭準備炸橋
           if (MT.kind === "bomb" && V.rule.bridgeBlow) {
             const t = V.nodes[mv.to];
