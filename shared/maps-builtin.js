@@ -110,7 +110,7 @@
     maps.push(hand({
       // 山地：高山把戰線切成三條路；中路的山區鐵路是窄軌（一手最多 3 格、坦克不能走），兩翼是標準軌
       name: "山地", variant, music: "mountain",
-      desc: "高山把戰線切成三條路；中路是穿過山區的窄軌，兩翼是標準軌",
+      desc: "防守型地圖：高山把戰線切成三條路，中路是穿過山區的窄軌、兩翼是標準軌。先攻比較吃虧，和棋也較多",
       rows: [
         ".堡...堡.",
         ".營山.山營.",
@@ -128,4 +128,5 @@
 
   LZ.builtinMaps = builtinMaps;
   LZ.standardMap = standardMap;
+  LZ.handMap = hand;
 })(typeof window !== "undefined" ? window : globalThis);
