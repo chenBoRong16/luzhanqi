@@ -188,6 +188,14 @@ textarea { width: 100%; font-family: Consolas, "Cascadia Mono", monospace; font-
   border: calc(var(--u) * 2.5) dashed #c47b1b; border-radius: inherit; pointer-events: none;
 }
 .cell.last-from::before { opacity: .55; }
+/* 格子上的文字小標籤（可爆破、上一手是不移動的動作） */
+.ctags {
+  position: absolute; bottom: calc(var(--u) * -13); left: 50%; transform: translateX(-50%);
+  display: flex; gap: calc(var(--u) * 2); pointer-events: none; z-index: 3; white-space: nowrap;
+}
+.ctag { font-size: calc(var(--u) * 11); color: #fff; padding: 0 calc(var(--u) * 4); border-radius: calc(var(--u) * 4); line-height: 1.35; }
+.ctag-blast { background: #b05a1e; }
+.ctag-last { background: #c47b1b; }
 .cell.t-move::after, .cell.t-deploy::after, .cell.t-drop::after, .cell.t-add::after {
   content: ""; width: calc(var(--u) * 18); height: calc(var(--u) * 18); border-radius: 50%;
   background: var(--ok); box-shadow: 0 0 0 calc(var(--u) * 4) rgba(63, 143, 74, .3);
@@ -273,7 +281,8 @@ textarea { width: 100%; font-family: Consolas, "Cascadia Mono", monospace; font-
 }
 .cell.t-snipe .piece::before { content: "狙"; top: calc(var(--u) * -10); right: calc(var(--u) * -8); background: #b03a2e; }
 .cell.t-blow::after { content: "炸橋"; top: calc(var(--u) * -12); background: #b03a2e; }
-.cell.t-snipe, .cell.t-blow { cursor: pointer; }
+.cell.t-snipe, .cell.t-blow, .cell.t-blast { cursor: pointer; }
+.cell.t-blast .piece { outline: calc(var(--u) * 3) dashed #e08a3a; outline-offset: calc(var(--u) * 2); }
 .cell.t-snipe .piece { outline: calc(var(--u) * 3) dashed #e0453a; outline-offset: calc(var(--u) * 2); }
 
 .track { height: 8px; border-radius: 4px; background: #1a1e19; border: 1px solid var(--line); margin-top: 8px; overflow: hidden; }
@@ -300,6 +309,13 @@ table.stats td:first-child, table.stats th:first-child { text-align: left; }
   font-size: calc(var(--u) * 11); color: #fff; background: #2f7fd6; padding: 0 calc(var(--u) * 4);
   border-radius: calc(var(--u) * 4); pointer-events: none; z-index: 2; white-space: nowrap;
 }
+.cell.sug-move::before { content: "建議移動"; }
+.cell.sug-attack::before { content: "建議攻擊"; }
+.cell.sug-blast::before { content: "建議爆破"; }
+.cell.sug-scout::before { content: "建議偵察"; }
+.cell.sug-snipe::before { content: "建議狙擊"; }
+.cell.sug-drop::before { content: "建議空降"; }
+.cell.sug-blow::before { content: "建議炸橋"; }
 .cell.sug-to { outline: calc(var(--u) * 3) dashed #2f7fd6; outline-offset: calc(var(--u) * 2); border-radius: calc(var(--u) * 8); }
 
 /* ---------- 地圖與新地形 ---------- */

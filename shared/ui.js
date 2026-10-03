@@ -546,10 +546,11 @@
         { omniscient: aiOpts(S.human).omniscient, explain: true, extra: [move], exclude: excludeCells(move.from) },
         (res) => done(LZ.adviceJudge(V, res, move)));
     }
+    const STAY_LABEL = { scout: "偵察", snipe: "狙擊", blast: "爆破", blow: "炸橋" };
+    const STAY_KINDS = new Set(Object.keys(STAY_LABEL));
     function moveName(m) {
-      const a = V.nodes[m.from], b = V.nodes[m.mv.to];
       const T = S.board[m.from] ? V.types[S.board[m.from].t].name : "棋";
-      return `${T}（${a.col + 1},${a.row + 1}）→（${b.col + 1},${b.row + 1}）`;
+      return LZ.actionText(V, m.from, m.mv.kind, m.mv.to, ui.watch ? null : S.human, T);
     }
     function doMove(from, mv) {
       const move = { from, mv };
@@ -806,7 +807,9 @@
         if (!ui.replay && ui.sel === n) cls.push("sel");
         if (targets.has(n)) cls.push(...targets.get(n).split(" ").map((k) => "t-" + k));
         if (deployOk && deployOk.has(n)) cls.push("t-deploy");
-        if (lm && lm.from === n) cls.push("last-from");
+        // 偵察、狙擊、爆破、炸橋：棋沒有移動，只標目標格和動作名稱
+        const lmStay = lm && STAY_KINDS.has(lm.k);
+        if (lm && lm.from === n && !lmStay) cls.push("last-from");
         if (lm && lm.to === n) cls.push("last-to");
         if (sug && sug.from === n) cls.push("sug-from");
         if (sug && sug.mv.to === n) cls.push("sug-to", "sug-" + sug.mv.kind);
@@ -815,7 +818,11 @@
         if (ui.drag && ui.drag.over === n && ui.drag.from !== n) cls.push("drop-over");
         if (ui.drag && ui.drag.moved && ui.drag.from === n) cls.push("dragging");
         el.className = cls.join(" ");
-        el.innerHTML = p ? pieceHtml(X, p) : "";
+        // 文字小標籤用真的元素，不和格子的 ::before／::after（可走點、已炸毀…）搶位置
+        const tags = [];
+        if (targets.has(n) && targets.get(n).split(" ").includes("blast")) tags.push(`<span class="ctag ctag-blast">爆破</span>`);
+        if (lm && lm.to === n && lmStay) tags.push(`<span class="ctag ctag-last">上一手：${STAY_LABEL[lm.k]}</span>`);
+        el.innerHTML = (p ? pieceHtml(X, p) : "") + (tags.length ? `<span class="ctags">${tags.join("")}</span>` : "");
       }
       // 斷橋
       for (const g of elSvg.querySelectorAll("[data-bridge]")) {
@@ -830,8 +837,8 @@
       return out;
     }
     function pieceLabel(n) {
-      const p = S.board[n], nd = V.nodes[n];
-      return `${p ? V.types[p.t].name : "棋"}（${nd.col + 1},${nd.row + 1}）`;
+      const p = S.board[n];
+      return `${p ? V.types[p.t].name : "棋"} ${LZ.posText(V, n, S.human)}`;
     }
     /** 改了條件或要求重算：同一局面新增一筆建議紀錄 */
     function markSugDirty() {

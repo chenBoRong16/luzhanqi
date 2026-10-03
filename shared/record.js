@@ -85,17 +85,35 @@
   }
 
   /** 第 i 步的文字說明 */
+  /** 格子位置：「我方 2列3欄」（列從前線算起）；me 為 null（觀戰）時寫「下方／上方」 */
+  function posText(V, n, me) {
+    const nd = V.nodes[n];
+    const who = me == null ? (nd.side === 0 ? "下方" : "上方") : nd.side === me ? "我方" : "對方";
+    return `${who} ${nd.row + 1}列${nd.col + 1}欄`;
+  }
+  /** 一手棋的說明：每種動作寫法不同；不移動的動作不畫箭頭。name 省略時不寫棋名 */
+  function actionText(V, from, kind, to, me, name) {
+    const a = (name ? name + " " : "") + posText(V, from, me);
+    const b = posText(V, to, me);
+    switch (kind) {
+      case "move": return `${a} → ${b}`;
+      case "attack": return `${a} 攻擊 ${b}`;
+      case "blast": return `${a} 爆破 ${b}`;
+      case "scout": return `${a} 偵察 ${b}`;
+      case "snipe": return `${a} 狙擊 ${b}`;
+      case "drop": return `${a} 空降到 ${b}`;
+      case "blow": return `${a} 炸橋`;
+      default: return `${a} 未知動作 ${b}`;
+    }
+  }
+
   function describe(V, rec, i) {
     const e = steps(rec)[i];
     if (!e) return "";
-    const pos = (n) => {
-      const nd = V.nodes[n];
-      return `${nd.side === rec.human ? "下" : "上"}方 ${nd.row + 1}-${nd.col + 1}`;
-    };
-    if (e.c) return { add: "【作弊】添加", del: "【作弊】刪除", move: "【作弊】搬動", swap: "【作弊】交換兩邊棋盤" }[e.c];
-    const verb = { move: "移動", attack: "攻擊", drop: "空降", scout: "偵察", snipe: "狙擊", blow: "炸橋" }[e.k] || e.k;
-    return `${verb}：${pos(e.f)} → ${pos(e.t)}`;
+    if (e.c === "draw") return `【作弊】和局條件改成${e.n ? ` ${e.n} 手` : "不判和"}`;
+    if (e.c) return { add: "【作弊】添加", del: "【作弊】刪除", move: "【作弊】搬動", swap: "【作弊】交換兩邊棋盤" }[e.c] || "【作弊】";
+    return actionText(V, e.f, e.k, e.t, rec.human);
   }
 
-  Object.assign(LZ, { RECORD_FORMAT, buildRecord, parseRecord, replayTo, variantForRecord, recordSteps: steps, describeStep: describe });
+  Object.assign(LZ, { RECORD_FORMAT, buildRecord, parseRecord, replayTo, variantForRecord, recordSteps: steps, describeStep: describe, posText, actionText });
 })(typeof window !== "undefined" ? window : globalThis);

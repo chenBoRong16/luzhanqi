@@ -951,7 +951,7 @@
         S.lost[q.side].push(q.t);
         B[mv.to] = p;
         B[from] = null;
-        S.lastMove = { from, to: mv.to, side: p.side };
+        S.lastMove = { from, to: mv.to, side: p.side, k: mv.kind };
         S.ply++;
         endGame(S, p.side, `${who}奪下軍旗`);
         entry.n = S.turn;
@@ -965,7 +965,7 @@
 
     for (const q of wasStunned) q.stunned = false;
     updateRadar(S);
-    S.lastMove = { from, to: mv.to, side: p.side };
+    S.lastMove = { from, to: mv.to, side: p.side, k: mv.kind };
     S.ply++;
     if (S.cheat.infinite && p.side === S.human) {
       S.turn = S.human;
