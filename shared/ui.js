@@ -867,7 +867,7 @@
           startThink(S.human, "suggest", (pick, res) => {
             ui.sugBusy = false;
             if (ui.suggestKey !== key) return;
-            const list = (res.scored || []).slice().sort((x, y) => y.score - x.score).slice(0, 10);
+            const list = LZ.rankScored(res.scored || []).slice(0, 10);
             if (!list.length && pick) list.push(pick);
             ui.sugHist.push({ cond, list, ms: res.ms });
             ui.sugAt = ui.sugHist.length - 1;

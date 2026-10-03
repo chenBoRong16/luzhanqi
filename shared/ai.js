@@ -506,7 +506,7 @@
             // 落點旁可能有防空炮就會被擊落：依推理估機率（明棋的防空炮＝1）
             if (V.rule.aa && V.rule.v3) {
               let pAA = 0;
-              for (const m of V.adj[mv.to]) {
+              for (const m of LZ.aaCoverCells(S, mv.to)) {
                 const q = B[m];
                 if (q && q.side !== side) pAA += pOfKinds(distOf(m), (T) => T.kind === "aa");
               }

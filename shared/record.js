@@ -34,6 +34,14 @@
     if (!Array.isArray(d.grids) || d.grids.length !== 2 || !Array.isArray(d.moves)) return { error: "棋譜內容不完整" };
     // 大翻新前的棋譜沒有 v3：照舊規則重播
     if (d.rules && !("v3" in d.rules)) d.rules = Object.assign({}, d.rules, { v3: false });
+    // 「爆破與規則檢查」之前的棋譜：照舊沿鐵路遠距爆破、只炸對方半場、防空炮只打相鄰
+    else if (d.rules && d.rules.v3 !== false && "blast" in d.rules) {
+      const old = {};
+      if (!("blastFar" in d.rules)) old.blastFar = true;
+      if (!("blastAny" in d.rules)) old.blastAny = false;
+      if (!("aaSight" in d.rules)) old.aaSight = false;
+      d.rules = Object.assign({}, d.rules, old);
+    }
     return { rec: d };
   }
 

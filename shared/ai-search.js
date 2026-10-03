@@ -259,6 +259,14 @@
     return (workUnits(clampDepth(depth)) * msPerUnit(V)) / 1000;
   }
 
+  /**
+   * 名次：推演過的排前面（依推演分數），其餘（粗估）排後面（依深度 1 分數）。
+   * 兩種分數的尺度不同，不能直接混在一起比，否則粗估的手可能排在 AI 真正選的那步前面
+   */
+  function rankScored(list) {
+    return list.slice().sort((a, b) => (b.deep ? 1 : 0) - (a.deep ? 1 : 0) || b.score - a.score);
+  }
+
   /** 搜尋結束時每一手的分數：推演過的用推演後的分數，其餘用深度 1 分數 */
   function scoredOf(state) {
     const out = new Map();
@@ -358,6 +366,7 @@
     AI_SEARCH_TUNE: TUNE,
     AI_MAX_DEPTH: MAX_DEPTH,
     aiSearch: search,
+    rankScored,
     aiThink: think,
     aiEstimateSeconds: estimateSeconds,
     aiWorkUnits: workUnits,

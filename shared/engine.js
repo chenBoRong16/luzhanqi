@@ -425,6 +425,33 @@
     return !(S.ruined && S.ruined.includes(n));
   }
 
+  /** 工兵能爆破的相鄰格：公路一格（含行營斜線，略過斷橋），或鐵路上一格 */
+  function blastNbrs(S, n) {
+    const V = S.V;
+    return new Set([...roadNbrs(S, n), ...(V.nodes[n].rail && V.railAdj ? V.railAdj[n] || [] : [])]);
+  }
+
+  /**
+   * 視線：從 n 看得到的格子（不含 n）。沿公路距離 dist 以內；目標在平原上時距離多 1；
+   * 森林、村莊裡看不到。雷達站、防空炮共用
+   */
+  function sightCells(S, n, dist) {
+    const V = S.V, R = V.rule;
+    const pairs = R.plain ? roadDistances(S, n, dist + 1).filter(([m, d]) => d <= dist || V.nodes[m].plain) : roadDistances(S, n, dist);
+    return pairs.map(([m]) => m).filter((m) => m !== n && !(R.forest && V.nodes[m].forest) && !(R.village && V.nodes[m].village));
+  }
+
+  /** 傘兵落在 to 時，哪些格子上的防空炮會開火（不看那格有沒有棋） */
+  function aaCoverCells(S, to) {
+    const V = S.V, R = V.rule;
+    if (!R.aaSight) return V.adj[to];
+    // 視線距離對稱：落點在防空炮的視線 1 以內（落點在平原時 2）
+    const out = [];
+    const reach = R.plain && V.nodes[to].plain ? 2 : 1;
+    for (const [m, d] of roadDistances(S, to, reach)) if (m !== to && d <= reach) out.push(m);
+    return out;
+  }
+
   /** 公路鄰居（略過斷掉的橋） */
   function roadNbrs(S, n) {
     const V = S.V;
@@ -460,9 +487,11 @@
     if (V.nodes[from].hq && !(R.v3 && R.hqExit)) return out;
     const seen = new Set();
     const add = (to, kind) => { if (!seen.has(to)) { seen.add(to); out.push({ to, kind }); } };
-    // 工兵爆破：攻擊得到的、對方半場沒被炸毀的防護格（空的也可以）
+    // 工兵爆破：相鄰（公路一格、含行營斜線，或鐵路一格）、沒被炸毀、裡面沒有自己棋的防護格（空的也可以）
+    // 舊棋譜用的隱藏開關：blastFar＝沿鐵路走得到的都能炸；blastAny 關＝只能炸對方半場
     const blastTo = [];
     const canBlast = T.kind === "engineer" && R.v3 && R.blast;
+    const blastNear = canBlast && !R.blastFar ? blastNbrs(S, from) : null;
     // 沼澤：坦克進不去（含攻擊沼澤裡的棋）；炸彈是步兵背的炸藥，可以進去
     const swampBan = R.swamp && T.kind === "tank";
     // 坦克走兩格時，中間那格除了要空，也不能是沼澤或森林（整段路要暢通）
@@ -471,7 +500,7 @@
     const consider = (to) => {
       if (swampBan && V.nodes[to].swamp) return false;
       const q = B[to];
-      if (canBlast && V.nodes[to].side !== side && isProtected(S, to) && (!q || q.side !== side) && !blastTo.includes(to)) blastTo.push(to);
+      if (canBlast && (!blastNear || blastNear.has(to)) && (R.blastAny || V.nodes[to].side !== side) && isProtected(S, to) && (!q || q.side !== side) && !blastTo.includes(to)) blastTo.push(to);
       if (!q) { add(to, "move"); return true; }
       if (q.side !== side && !isProtected(S, to)) add(to, "attack");
       return false;
@@ -801,13 +830,9 @@
       const r = B[n];
       if (!r || V.types[r.t].kind !== "radar") continue;
       // 範圍 1 格；目標站在平原上時 2 格。森林、村莊裡的看不到
-      const targets = V.rule.plain
-        ? roadDistances(S, n, 2).filter(([m, d]) => d === 1 || V.nodes[m].plain).map(([m]) => m)
-        : roadNbrs(S, n);
-      for (const m of targets) {
+      for (const m of sightCells(S, n, 1)) {
         const q = B[m];
-        if (!q || q.side === r.side || q.faceUp || (V.rule.forest && V.nodes[m].forest)) continue;
-        if (V.rule.village && V.nodes[m].village) continue;
+        if (!q || q.side === r.side || q.faceUp) continue;
         reveal(q);
         S._fx.radar = true;
         S.stats.radar[r.side]++;
@@ -861,7 +886,13 @@
       else { q.cand[p.side] = 1 << q.t; p.cand[opp] = 1 << p.t; }
       ev.defender = q.t;
       S.stats.scout[p.side]++;
-      S.log.push(`${who}偵察 → 揭露${p.side === S.human ? "：" + V.types[q.t].name : "我方一顆棋"}`);
+      if (V.boardMode) {
+        // 兩顆都翻成明棋，名字雙方都知道，寫清楚
+        const pos = (n) => { const nd = V.nodes[n]; return `${nd.side === S.human ? "我方" : "對方"} ${nd.row + 1}列${nd.col + 1}欄`; };
+        S.log.push(`${who}偵察 ${pos(from)} → ${pos(mv.to)} 的${V.types[q.t].name}；兩顆都翻成明棋`);
+      } else {
+        S.log.push(`${who}偵察 → 揭露${p.side === S.human ? "：" + V.types[q.t].name : "我方一顆棋"}`);
+      }
       S.quiet++;
     } else if (mv.kind === "move" || mv.kind === "drop") {
       if (mv.kind === "move") {
@@ -878,8 +909,8 @@
         if (V.boardMode) reveal(p);
         else p.cand[opp] = 1 << p.t;
         S.stats.drop[p.side]++;
-        // 落點和對方防空炮公路相鄰：傘兵被擊落，防空炮開火暴露位置（翻成明棋）
-        const aaAt = R.aa && R.v3 ? V.adj[mv.to].find((m) => B[m] && B[m].side === opp && V.types[B[m].t].kind === "aa") : undefined;
+        // 落點在對方防空炮的視線內：傘兵被擊落，防空炮開火暴露位置（翻成明棋）
+        const aaAt = R.aa && R.v3 ? aaCoverCells(S, mv.to).find((m) => B[m] && B[m].side === opp && V.types[B[m].t].kind === "aa") : undefined;
         if (aaAt !== undefined) {
           reveal(B[aaAt]);
           removePiece(S, mv.to, opp);
@@ -1116,6 +1147,6 @@
     resolveRules, buildVariant, placementError, originMask, resolve, resolveAt, defRank, snipeHits,
     rankedKind, newGame, makePiece, setSideGrid, sideGrid, validateSide, startPlay, movesFor, legalMoves,
     hasAnyMove, applyMove, popcount, singleType, snapshot, restore, swapSides, cheatAdd, cheatDelete,
-    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, namesGrid, newStats, drawLimit, cheatSetDraw, isProtected,
+    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, sightCells, aaCoverCells, blastNbrs, namesGrid, newStats, drawLimit, cheatSetDraw, isProtected,
   });
 })(typeof window !== "undefined" ? window : globalThis);
