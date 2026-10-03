@@ -153,8 +153,17 @@
   function terrainLegendHtml(V) {
     const items = terrainLegend(V);
     if (!items.length) return "";
+    const def = V.rule && V.rule.terrainDef;
+    const ruleOf = (e) => {
+      if (!def) return e.rule;
+      if (e.key === "forest" || e.key === "village") return e.rule + "。防守 +1";
+      if (e.key === "swamp") return e.rule + "。防守 −1";
+      if (e.key === "camp") return "打得到，防守 +1，工兵可以爆破；開局空著；可以斜走";
+      if (e.key === "bunker") return "打得到，防守 +2，工兵可以爆破；開局可以放棋";
+      return e.rule;
+    };
     return `<ul class="legend">${items.map((e) =>
-      `<li><b>${e.name}</b>（${e.sym}）：${e.rule}。<span class="muted">${e.why}。</span></li>`).join("")}</ul>`;
+      `<li><b>${e.name}</b>（${e.sym}）：${ruleOf(e)}。<span class="muted">${e.why}。</span></li>`).join("")}</ul>`;
   }
 
   Object.assign(LZ, { boardGeom, drawBoard, terrainLegend, terrainLegendHtml, TERRAIN_LEGEND: LEGEND });
