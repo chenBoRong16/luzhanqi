@@ -820,7 +820,18 @@
         el.className = cls.join(" ");
         // 文字小標籤用真的元素，不和格子的 ::before／::after（可走點、已炸毀…）搶位置
         const tags = [];
-        if (targets.has(n) && targets.get(n).split(" ").includes("blast")) tags.push(`<span class="ctag ctag-blast">爆破</span>`);
+        const tk = targets.has(n) ? targets.get(n).split(" ") : [];
+        if (tk.includes("blast")) tags.push(`<span class="ctag ctag-blast">爆破</span>`);
+        // 擴充版-1 地形防守加成：可攻擊、可狙擊的敵棋站在有加成的格子
+        if (tk.includes("attack") || tk.includes("snipe")) {
+          const d = LZ.terrainDefense(V, n, S);
+          if (d) tags.push(`<span class="ctag ctag-def" title="地形防守加成：守方等級 ${d > 0 ? "+" : "−"}${Math.abs(d)}">守${d > 0 ? "+" : "−"}${Math.abs(d)}</span>`);
+        }
+        // 空降：落點在「我方已確定是防空炮」的敵棋範圍內（不確定的不標，避免洩漏）
+        if (tk.includes("drop") && V.rule.aa && V.rule.v3 && LZ.aaCoverCells(S, n).some((m) => {
+          const q = S.board[m];
+          return q && q.side !== S.human && V.types[q.t].kind === "aa" && (q.faceUp || LZ.singleType(q.cand[S.human]) === q.t);
+        })) tags.push(`<span class="ctag ctag-danger">會被擊落</span>`);
         if (lm && lm.to === n && lmStay) tags.push(`<span class="ctag ctag-last">上一手：${STAY_LABEL[lm.k]}</span>`);
         el.innerHTML = (p ? pieceHtml(X, p) : "") + (tags.length ? `<span class="ctags">${tags.join("")}</span>` : "");
       }

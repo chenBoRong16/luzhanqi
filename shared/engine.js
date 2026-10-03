@@ -228,17 +228,33 @@
 
   const NO_RULES = { rule: {}, nodes: [] };
 
-  /** 防守方實際比較的等級（碉堡加級） */
-  function defRank(V, D, to) {
+  /**
+   * 擴充版-1 地形防守值：森林、村莊、行營 +1，碉堡 +2，沼澤 −1；行營、碉堡被炸毀後 0。
+   * S 省略時當作沒炸毀
+   */
+  function terrainDefense(V, to, S) {
+    const R = V.rule;
+    if (!R.terrainDef || to == null || !V.nodes[to]) return 0;
+    const nd = V.nodes[to];
+    const ruined = S && S.ruined && S.ruined.includes(to);
+    if (R.bunker && nd.bunker) return ruined ? 0 : 2;
+    if (nd.camp) return ruined ? 0 : 1;
+    if ((R.forest && nd.forest) || (R.village && nd.village)) return 1;
+    if (R.swamp && nd.swamp) return -1;
+    return 0;
+  }
+
+  /** 防守方實際比較的等級（舊規則碉堡加級；擴充版-1 地形防守值） */
+  function defRank(V, D, to, S) {
     if (V.rule.bunker && !V.rule.v3 && to != null && V.nodes[to].bunker && rankedKind(D)) return V.rankUp[D.idx];
-    return D.rank;
+    return D.rank + terrainDefense(V, to, S);
   }
 
   /**
    * A 攻擊站在 to 格的 D：flag（奪旗）、win（D 移除）、lose（A 移除）、both（同歸於盡）。
    * 只比等級或固定的剋制關係，沒有數值計算（實體棋盤相容）。
    */
-  function resolveAt(V, A, D, to) {
+  function resolveAt(V, A, D, to, S) {
     const R = V.rule;
     if (D.kind === "flag") return "flag";
     if (A.kind === "bomb" || D.kind === "bomb") return "both";
@@ -255,7 +271,7 @@
       if (D.kind === "aa" && A.kind === "para") return "lose";
     }
     if (A.kind === "spy" && D.kind === "commander") return "win";
-    const dr = defRank(V, D, to);
+    const dr = defRank(V, D, to, S);
     if (A.rank > dr) return "win";
     if (A.rank < dr) return "lose";
     return "both";
@@ -267,9 +283,9 @@
   }
 
   /** 狙擊是否命中：目標實際等級比營長小；炸彈、地雷、軍旗一律不中 */
-  function snipeHits(V, D, to) {
+  function snipeHits(V, D, to, S) {
     if (D.kind === "bomb" || D.kind === "mine" || D.kind === "flag") return false;
-    return (V.rule.v3 ? D.rank : defRank(V, D, to)) < V.snipeRank;
+    return (V.rule.v3 ? D.rank + terrainDefense(V, to, S) : defRank(V, D, to)) < V.snipeRank;
   }
 
   // ---------- 遊戲狀態 ----------
@@ -418,11 +434,19 @@
   /**
    * 防護格：裡面的棋不能被攻擊。原版、舊規則：行營。大翻新後：行營、碉堡，被工兵爆破過的除外。
    */
-  function isProtected(S, n) {
+  /** 行營、碉堡（工事）而且還沒被炸毀：工兵可以爆破 */
+  function isFortified(S, n) {
     const V = S.V, nd = V.nodes[n], R = V.rule;
-    if (!R.v3) return !!nd.camp;
     if (!(nd.camp || (R.bunker && nd.bunker))) return false;
     return !(S.ruined && S.ruined.includes(n));
+  }
+
+  /** 裡面的棋打不到（擴充版-0）；擴充版-1 開了地形防守加成時改用加成，不再打不到 */
+  function isProtected(S, n) {
+    const V = S.V, R = V.rule;
+    if (!R.v3) return !!V.nodes[n].camp;
+    if (R.terrainDef) return false;
+    return isFortified(S, n);
   }
 
   /** 工兵能爆破的相鄰格：公路一格（含行營斜線，略過斷橋），或鐵路上一格 */
@@ -500,7 +524,7 @@
     const consider = (to) => {
       if (swampBan && V.nodes[to].swamp) return false;
       const q = B[to];
-      if (canBlast && (!blastNear || blastNear.has(to)) && (R.blastAny || V.nodes[to].side !== side) && isProtected(S, to) && (!q || q.side !== side) && !blastTo.includes(to)) blastTo.push(to);
+      if (canBlast && (!blastNear || blastNear.has(to)) && (R.blastAny || V.nodes[to].side !== side) && isFortified(S, to) && (!q || q.side !== side) && !blastTo.includes(to)) blastTo.push(to);
       if (!q) { add(to, "move"); return true; }
       if (q.side !== side && !isProtected(S, to)) add(to, "attack");
       return false;
@@ -931,11 +955,11 @@
     } else if (mv.kind === "snipe") {
       const q = B[mv.to];
       const D = V.types[q.t];
-      const hit = snipeHits(V, D, mv.to);
+      const hit = snipeHits(V, D, mv.to, S);
       ev.defender = q.t;
       ev.result = hit ? "win" : "miss";
       reveal(p);
-      q.cand[p.side] = filterMask(V, q.cand[p.side], (X) => snipeHits(V, X, mv.to) === hit);
+      q.cand[p.side] = filterMask(V, q.cand[p.side], (X) => snipeHits(V, X, mv.to, S) === hit);
       S.stats.snipe[p.side]++;
       S.log.push(`${who}狙擊手狙擊 ${pieceName(q.side, q.t)}：${hit ? "命中" : "失敗"}`);
       if (hit) {
@@ -964,15 +988,15 @@
     } else {
       const q = B[mv.to];
       const D = V.types[q.t];
-      const r = resolveAt(V, T, D, mv.to);
+      const r = resolveAt(V, T, D, mv.to, S);
       ev.defender = q.t;
       ev.result = r;
       if (R.bunker && V.nodes[mv.to].bunker) S.stats.bunkerDef[q.side]++;
       // 統計與音效：衝 3 格撞棋、沿窄軌撞棋也算用到地形（不影響規則）
       terrainMoveStats(S, from, mv.to, p, ev);
       // 雙方各自從結果推理對方的棋
-      q.cand[p.side] = filterMask(V, q.cand[p.side], (X) => resolveAt(V, T, X, mv.to) === r);
-      p.cand[opp] = filterMask(V, p.cand[opp] & V.mobileMask, (X) => resolveAt(V, X, D, mv.to) === r);
+      q.cand[p.side] = filterMask(V, q.cand[p.side], (X) => resolveAt(V, T, X, mv.to, S) === r);
+      p.cand[opp] = filterMask(V, p.cand[opp] & V.mobileMask, (X) => resolveAt(V, X, D, mv.to, S) === r);
       revealByMovement(S, from, mv.to, p);
       p.moved = true;
       const verb = { flag: "奪下軍旗", win: "勝", lose: "敗", both: "同歸於盡" }[r];
@@ -1147,6 +1171,6 @@
     resolveRules, buildVariant, placementError, originMask, resolve, resolveAt, defRank, snipeHits,
     rankedKind, newGame, makePiece, setSideGrid, sideGrid, validateSide, startPlay, movesFor, legalMoves,
     hasAnyMove, applyMove, popcount, singleType, snapshot, restore, swapSides, cheatAdd, cheatDelete,
-    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, sightCells, aaCoverCells, blastNbrs, namesGrid, newStats, drawLimit, cheatSetDraw, isProtected,
+    cheatMove, checkStuck, endGame, updateRadar, roadNbrs, roadDistances, reveal, sightCells, aaCoverCells, blastNbrs, namesGrid, newStats, drawLimit, cheatSetDraw, isProtected, isFortified, terrainDefense,
   });
 })(typeof window !== "undefined" ? window : globalThis);

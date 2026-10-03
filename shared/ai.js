@@ -60,21 +60,50 @@
   const GENERIC = { kind: "normal", mobile: true };
 
   /** 站在 node 的我方棋種 MT 被敵棋（分佈 dist）攻擊時的期望損失 */
-  function expectedLoss(V, MT, dist, node) {
+  function expectedLoss(V, MT, dist, node, S) {
     let loss = 0;
     for (const [T, p] of dist) {
       if (!T.mobile) continue;
-      const r = LZ.resolveAt(V, T, MT, node);
+      const r = LZ.resolveAt(V, T, MT, node, S);
       if (r === "win" || r === "flag") loss += p * MT.value;
       else if (r === "both") loss += p * Math.max(0, MT.value - T.value);
     }
     return loss;
   }
 
-  function attackEV(V, MT, dist, to) {
+  /**
+   * 假設 to 已被炸開：自己除了 except 以外的棋，下一手攻擊 to 的最佳勝率（依推測分佈 dist）。
+   * 只看已知自己棋種（自己的棋自己一定知道）
+   */
+  function followUpWin(S, side, except, to, dist) {
+    const V = S.V;
+    const had = S.ruined ? S.ruined.slice() : null;
+    S.ruined = (S.ruined || []).concat([to]);
+    let best = 0;
+    try {
+      for (let n = 0; n < S.board.length; n++) {
+        const p = S.board[n];
+        if (!p || p.side !== side || n === except || !V.types[p.t].mobile) continue;
+        if (!LZ.legalMoves(S, n).some((m) => m.to === to && m.kind === "attack")) continue;
+        const A = V.types[p.t];
+        let w = 0;
+        for (const [T, pr] of dist) {
+          const r = LZ.resolveAt(V, A, T, to, S);
+          if (r === "win" || r === "flag") w += pr;
+          else if (r === "both") w += pr * 0.5;
+        }
+        if (w > best) best = w;
+      }
+    } finally {
+      S.ruined = had;
+    }
+    return best;
+  }
+
+  function attackEV(V, MT, dist, to, S) {
     let ev = 0;
     for (const [T, p] of dist) {
-      const r = LZ.resolveAt(V, MT, T, to);
+      const r = LZ.resolveAt(V, MT, T, to, S);
       if (r === "flag") ev += p * FLAG_VALUE;
       else if (r === "win") ev += p * (T.value + 2);
       else if (r === "lose") ev -= p * MT.value;
@@ -285,7 +314,7 @@
       let worst = 0;
       for (const e of enemies) {
         if (!B[e] || B[e].side === side) continue;
-        if (reachOf(e, changed).attacks.has(n)) worst = Math.max(worst, expectedLoss(V, MT, distOf(e), n));
+        if (reachOf(e, changed).attacks.has(n)) worst = Math.max(worst, expectedLoss(V, MT, distOf(e), n, S));
       }
       return worst;
     };
@@ -349,7 +378,7 @@
         if (mv.kind === "attack") {
           const dist = distOf(mv.to);
           const amb = ambiguity(dist);
-          let ev = attackEV(V, MT, dist, mv.to);
+          let ev = attackEV(V, MT, dist, mv.to, S);
           if (L.smart) {
             // 只對「很糊 + 超高價值子」略保守，避免大子亂撞；不要全面縮手
             if (amb > 2.2 && MT.value >= 75) ev -= (amb - 2.2) * 6;
@@ -364,7 +393,7 @@
             }
             // 已知必輸才重罰（不明棋的「可能輸」不要當自殺）
             if (dist.length === 1) {
-              const r0 = LZ.resolveAt(V, MT, dist[0][0], mv.to);
+              const r0 = LZ.resolveAt(V, MT, dist[0][0], mv.to, S);
               if (r0 === "lose") ev -= MT.value * 0.9;
               if (r0 === "flag" || r0 === "win") ev += 8;
             }
@@ -375,14 +404,14 @@
           if (L.trade !== 1) {
             let pBoth = 0;
             for (const [T, pr] of dist) {
-              if (LZ.resolveAt(V, MT, T, mv.to) === "both") pBoth += pr;
+              if (LZ.resolveAt(V, MT, T, mv.to, S) === "both") pBoth += pr;
             }
             score += pBoth * 10 * (L.trade - 1);
           }
           if (flagThreats.has(mv.to)) {
             let pRemove = 0;
             for (const [T, pr] of dist) {
-              const r = LZ.resolveAt(V, MT, T, mv.to);
+              const r = LZ.resolveAt(V, MT, T, mv.to, S);
               if (r === "win" || r === "both") pRemove += pr;
             }
             score += pRemove * FLAG_DANGER * L.flag;
@@ -390,7 +419,7 @@
           // 打贏後留在原地的風險
           let pWin = 0;
           for (const [T, pr] of dist) {
-            const r = LZ.resolveAt(V, MT, T, mv.to);
+            const r = LZ.resolveAt(V, MT, T, mv.to, S);
             if (r === "win" || r === "flag") pWin += pr;
           }
           // 清空可動棋：能移除「可能能動」的棋就加分，動過的（一定能動）加更多；吃不能動的棋不加分
@@ -398,7 +427,7 @@
             let pKill = 0;
             for (const [T, pr] of dist) {
               if (!T.mobile) continue;
-              const r = LZ.resolveAt(V, MT, T, mv.to);
+              const r = LZ.resolveAt(V, MT, T, mv.to, S);
               if (r === "win" || r === "both") pKill += pr;
             }
             score += pKill * (B[mv.to].moved ? 35 : 25);
@@ -406,7 +435,7 @@
           if (why) {
             let pLose = 0, pMine = 0;
             for (const [T, pr] of dist) {
-              const r = LZ.resolveAt(V, MT, T, mv.to);
+              const r = LZ.resolveAt(V, MT, T, mv.to, S);
               if (r === "lose") pLose += pr;
               if (T.kind === "mine") pMine += pr;
             }
@@ -439,11 +468,11 @@
         } else if (mv.kind === "snipe") {
           // 狙擊：命中就賺到目標；不論中不中都會暴露自己
           let ev = 0;
-          for (const [T, pr] of distOf(mv.to)) if (LZ.snipeHits(V, T, mv.to)) ev += pr * (T.value + 2);
+          for (const [T, pr] of distOf(mv.to)) if (LZ.snipeHits(V, T, mv.to, S)) ev += pr * (T.value + 2);
           score += (ev * L.attack - (p.faceUp ? 0 : 3)) * L.snipe;
           if (flagThreats.has(mv.to)) {
             let pHit = 0;
-            for (const [T, pr] of distOf(mv.to)) if (LZ.snipeHits(V, T, mv.to)) pHit += pr;
+            for (const [T, pr] of distOf(mv.to)) if (LZ.snipeHits(V, T, mv.to, S)) pHit += pr;
             score += pHit * FLAG_DANGER * L.flag;
           }
           score -= dangerFrom * 0.3 * L.danger;
@@ -458,6 +487,8 @@
             if (V.nodes[mv.to].bunker) ev += 3;
             // 清空可動棋：躲在防護格裡的棋要先炸開才吃得到
             if (L.slaughter && knownMask(q, side) & V.mobileMask) ev += 20;
+            // 炸開後要有別的棋下一手能攻擊、而且大概會贏，否則只是白白讓工兵曝光
+            if (followUpWin(S, side, from, mv.to, distOf(mv.to)) < 0.5) ev -= 25 + 0.5 * MT.value;
           }
           score += ev * L.attack;
           score -= dangerFrom * 0.8 * L.danger;

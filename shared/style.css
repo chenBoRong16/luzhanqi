@@ -196,6 +196,8 @@ textarea { width: 100%; font-family: Consolas, "Cascadia Mono", monospace; font-
 .ctag { font-size: calc(var(--u) * 11); color: #fff; padding: 0 calc(var(--u) * 4); border-radius: calc(var(--u) * 4); line-height: 1.35; }
 .ctag-blast { background: #b05a1e; }
 .ctag-last { background: #c47b1b; }
+.ctag-def { background: #3d6b8f; }
+.ctag-danger { background: #b03a2e; }
 .cell.t-move::after, .cell.t-deploy::after, .cell.t-drop::after, .cell.t-add::after {
   content: ""; width: calc(var(--u) * 18); height: calc(var(--u) * 18); border-radius: 50%;
   background: var(--ok); box-shadow: 0 0 0 calc(var(--u) * 4) rgba(63, 143, 74, .3);

@@ -40,6 +40,7 @@
       if (!("blastFar" in d.rules)) old.blastFar = true;
       if (!("blastAny" in d.rules)) old.blastAny = false;
       if (!("aaSight" in d.rules)) old.aaSight = false;
+      if (!("terrainDef" in d.rules)) old.terrainDef = false;
       d.rules = Object.assign({}, d.rules, old);
     }
     return { rec: d };
