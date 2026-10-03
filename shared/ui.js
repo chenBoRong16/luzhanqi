@@ -80,6 +80,8 @@
       watch: false, speed: persist.speed,
       replay: null, // { rec, k, total, S }
       suggestOn: persist.suggest, suggestion: null, suggestKey: "",
+      // AI 建議：排除的我方棋（pid）、這個局面的建議紀錄 [{cond, list, ms}]、看第幾筆、第幾名
+      exclude: new Set(), sugHist: [], sugAt: 0, sugRank: 0, sugDirty: false, sugBusy: false,
       think: null, thinkTick: null, // 正在思考：{ side, purpose: "move"|"suggest", key, handle }
     };
 
@@ -231,8 +233,7 @@
     const aiPanel = LZ.mountAiPanel($(".ai-panel"), V, {
       onChange(who, set, what) {
         S.log.push(what);
-        ui.suggestKey = "";
-        if (ui.think && ui.think.purpose === "suggest") cancelThink();
+        markSugDirty();
         render();
       },
     });
@@ -282,6 +283,7 @@
       const keep = S ? Object.assign({}, S.cheat) : persist.cheat;
       S = LZ.newGame(V);
       S.drawQuiet = drawFromSetting();
+      ui.exclude = new Set();
       cancelAdvice();
       if (keep) { Object.assign(S.cheat, keep); S.cheat.used = false; }
       LZ.setSideGrid(S, S.human, myGrid || loadMyGrid());
@@ -333,18 +335,18 @@
       ui.thinkTick = null;
     }
     /** 分段思考（不卡畫面）；想完呼叫 done(pick)。局面在途中變了就丟掉結果 */
-    function startThink(side, purpose, done) {
+    function startThink(side, purpose, done, extraOpts) {
       cancelThink();
       const t = { side, purpose, key: stateKey(), handle: null };
       ui.think = t;
-      t.handle = LZ.aiThink(S, side, Math.random, settingsOf(side), aiOpts(side), (res) => {
+      t.handle = LZ.aiThink(S, side, Math.random, settingsOf(side), Object.assign(aiOpts(side), extraOpts), (res) => {
         if (ui.think !== t) return;
         ui.think = null;
         clearInterval(ui.thinkTick);
         ui.thinkTick = null;
         aiPanel.setLast(whoOf(side), res);
         if (stateKey() !== t.key) { render(); return; }
-        done(res.pick);
+        done(res.pick, res);
       });
       ui.thinkTick = setInterval(() => {
         const el = elStatus.querySelector(".think-sec");
@@ -479,6 +481,9 @@
       if (p && p.side !== S.human) {
         e.preventDefault();
         openMark(Number(cell.dataset.n));
+      } else if (p && p.side === S.human && S.phase === "play") {
+        e.preventDefault();
+        openExclude(Number(cell.dataset.n));
       }
     });
 
@@ -538,7 +543,7 @@
     function checkAdvice(S0, move, done) {
       const set = setting.advice.ai === "own" ? aiPanel.get("advice") : aiPanel.get("me");
       return LZ.aiThink(S0, S0.turn, LZ.aiRng(LZ.adviceSeed(S0)), LZ.adviceSettings(set),
-        { omniscient: aiOpts(S.human).omniscient, explain: true, extra: [move] },
+        { omniscient: aiOpts(S.human).omniscient, explain: true, extra: [move], exclude: excludeCells(move.from) },
         (res) => done(LZ.adviceJudge(V, res, move)));
     }
     function moveName(m) {
@@ -670,6 +675,17 @@
     }
     function closePop() { elPop.hidden = true; elPop.innerHTML = ""; }
 
+    /** 自己的棋：AI 建議要不要排除它 */
+    function openExclude(n) {
+      const p = S.board[n];
+      if (!p) return;
+      const on = ui.exclude.has(p.pid);
+      elPop.innerHTML = `<div class="pop-title">${V.types[p.t].name}：AI 建議</div>
+        <div class="row"><button type="button" data-ex="${on ? "off" : "on"}">${on ? "取消排除（可以建議這顆）" : "不要建議這顆"}</button></div>`;
+      elPop.dataset.n = n;
+      elPop.dataset.mode = "exclude";
+      placePop(n);
+    }
     function openMark(n) {
       const p = S.board[n];
       if (!p || p.side === S.human) return;
@@ -702,6 +718,12 @@
       if (elPop.dataset.mode === "mark") {
         const p = S.board[Number(elPop.dataset.n)];
         if (p) p.mark = b.dataset.mark || null;
+      } else if (elPop.dataset.mode === "exclude") {
+        const p = S.board[Number(elPop.dataset.n)];
+        if (p) {
+          if (b.dataset.ex === "on") ui.exclude.add(p.pid); else ui.exclude.delete(p.pid);
+          markSugDirty();
+        }
       } else if (elPop.dataset.mode === "action") {
         const mv = ui.pendingOpts[Number(b.dataset.opt)];
         closePop();
@@ -801,24 +823,55 @@
       }
     }
 
-    /** 標示 AI 建議：同一個局面只算一次（電腦有隨機性，重算會跳來跳去）；深度高時在背景想 */
+    /** 排除的我方棋目前在哪些格子（AI 建議、代走、提醒都不選） */
+    function excludeCells(skip) {
+      const out = [];
+      S.board.forEach((p, n) => { if (p && p.side === S.human && ui.exclude.has(p.pid) && n !== skip) out.push(n); });
+      return out;
+    }
+    function pieceLabel(n) {
+      const p = S.board[n], nd = V.nodes[n];
+      return `${p ? V.types[p.t].name : "棋"}（${nd.col + 1},${nd.row + 1}）`;
+    }
+    /** 改了條件或要求重算：同一局面新增一筆建議紀錄 */
+    function markSugDirty() {
+      ui.sugDirty = true;
+      if (ui.think && ui.think.purpose === "suggest") { cancelThink(); ui.sugBusy = false; }
+    }
+    /** 目前顯示的建議（第幾筆紀錄的第幾名）；需要時在背景算一筆新的 */
     function currentSuggestion() {
       if (!ui.suggestOn || ui.replay || ui.watch || S.phase !== "play" || S.turn !== S.human) return null;
       const key = stateKey();
       if (ui.suggestKey !== key) {
         ui.suggestKey = key;
-        ui.suggestion = null;
+        ui.sugHist = []; ui.sugAt = 0; ui.sugRank = 0; ui.sugBusy = false;
+        ui.sugDirty = true;
+      }
+      if (ui.sugDirty && !ui.sugBusy) {
+        ui.sugDirty = false;
+        ui.sugBusy = true;
         setTimeout(() => {
-          if (ui.suggestKey !== key || stateKey() !== key || (ui.think && ui.think.purpose === "move")) return;
-          if (!ui.suggestOn || ui.replay || ui.watch || S.phase !== "play" || S.turn !== S.human) return;
-          startThink(S.human, "suggest", (pick) => {
-            if (ui.suggestKey === key) ui.suggestion = pick;
+          if (ui.suggestKey !== key || stateKey() !== key || (ui.think && ui.think.purpose === "move")) { ui.sugBusy = false; return; }
+          if (!ui.suggestOn || ui.replay || ui.watch || S.phase !== "play" || S.turn !== S.human) { ui.sugBusy = false; return; }
+          const ex = excludeCells();
+          const set = settingsOf(S.human);
+          const P = LZ.AI_PERSONAS[set.style];
+          const cond = `深度 ${set.depth}、${P ? P.name : set.style}` + (ex.length ? `、排除：${ex.map(pieceLabel).join("、")}` : "") + (aiOpts(S.human).omniscient ? "、上帝視角" : "");
+          startThink(S.human, "suggest", (pick, res) => {
+            ui.sugBusy = false;
+            if (ui.suggestKey !== key) return;
+            const list = (res.scored || []).slice().sort((x, y) => y.score - x.score).slice(0, 10);
+            if (!list.length && pick) list.push(pick);
+            ui.sugHist.push({ cond, list, ms: res.ms });
+            ui.sugAt = ui.sugHist.length - 1;
+            ui.sugRank = 0;
             render();
-          });
+          }, { explain: true, exclude: ex });
           renderStatus();
         }, 0);
       }
-      return ui.suggestion;
+      const rec = ui.sugHist[ui.sugAt];
+      return rec ? rec.list[ui.sugRank] || null : null;
     }
 
     function pieceHtml(X, p) {
@@ -849,7 +902,8 @@
         title = "對方已推得這顆棋";
       }
       if (p.stunned) { cls.push("stunned"); title = "翻倒：下一回合不能動"; }
-      const dropMark = T.kind === "para" && p.dropUsed && showTrue ? `<span class="pm">降</span>` : "";
+      const dropMark = (T.kind === "para" && p.dropUsed && showTrue ? `<span class="pm">降</span>` : "") +
+        (mine && ui.exclude.has(p.pid) ? `<span class="px" title="AI 建議不會選這顆">禁</span>` : "");
       return `<span class="${cls.join(" ")}"${title ? ` title="${title}"` : ""}>
         <span class="pn">${main}</span>${hint ? `<span class="ph">${hint}</span>` : ""}${badge ? `<span class="pb">${badge}</span>` : ""}${dropMark}</span>`;
     }
@@ -910,6 +964,18 @@
         } else {
           const res = S.winner === -1 ? "和棋" : S.winner === me ? "你贏了" : "電腦贏了";
           head = `<div class="phase end ${S.winner === me ? "win" : S.winner === -1 ? "" : "lose"}">${res}</div><p>${S.endReason}</p>`;
+        }
+        if (ui.suggestOn && playing && !ui.watch && S.turn === me && ui.sugHist.length) {
+          const rec = ui.sugHist[ui.sugAt];
+          const m = rec.list[ui.sugRank];
+          head += `<div class="sug-row"><b>AI 建議</b> 第 ${ui.sugRank + 1}／${rec.list.length} 名：${m ? moveName(m) : "（沒有可走的步）"}${m && !m.deep && rec.list.some((x) => x.deep) ? "（粗估）" : ""}${m && m.onlyExcluded ? "（其他棋都不能動，只好用排除的棋）" : ""}
+            <div class="row wrap">
+              <button type="button" class="small" data-act="sugPrev"${ui.sugRank ? "" : " disabled"}>上一個</button>
+              <button type="button" class="small" data-act="sugNext"${ui.sugRank < rec.list.length - 1 ? "" : " disabled"}>下一個</button>
+              <button type="button" class="small" data-act="sugRedo">重算</button>
+              ${ui.sugHist.length > 1 ? `<span class="muted">紀錄</span><button type="button" class="small" data-act="sugHistPrev"${ui.sugAt ? "" : " disabled"}>◀</button><span class="muted">${ui.sugAt + 1}／${ui.sugHist.length}</span><button type="button" class="small" data-act="sugHistNext"${ui.sugAt < ui.sugHist.length - 1 ? "" : " disabled"}>▶</button>` : ""}
+            </div>
+            <p class="muted">條件：${rec.cond}；${(rec.ms / 1000).toFixed(1)} 秒</p></div>`;
         }
         if (ui.think && playing) {
           const sec = (ui.think.handle.elapsed() / 1000).toFixed(1);
@@ -1182,11 +1248,15 @@
           return scheduleAI();
         case "autoMove":
           if (S.phase !== "play" || S.turn !== S.human || (ui.think && ui.think.purpose === "move")) return;
+          {
+            const shown = ui.suggestOn && ui.suggestKey === stateKey() ? currentSuggestion() : null;
+            if (shown) { playAiPick(S.human, shown); render(); scheduleAI(); return; }
+          }
           startThink(S.human, "move", (pick) => {
             playAiPick(S.human, pick);
             render();
             scheduleAI();
-          });
+          }, { exclude: excludeCells() });
           return render();
         case "adviceGo": {
           const a = ui.advice;
@@ -1198,6 +1268,11 @@
           cancelAdvice();
           ui.sel = null; ui.legal = [];
           return render();
+        case "sugPrev": ui.sugRank = Math.max(0, ui.sugRank - 1); return render();
+        case "sugNext": { const rec = ui.sugHist[ui.sugAt]; if (rec) ui.sugRank = Math.min(rec.list.length - 1, ui.sugRank + 1); return render(); }
+        case "sugRedo": markSugDirty(); return render();
+        case "sugHistPrev": ui.sugAt = Math.max(0, ui.sugAt - 1); ui.sugRank = 0; return render();
+        case "sugHistNext": ui.sugAt = Math.min(ui.sugHist.length - 1, ui.sugAt + 1); ui.sugRank = 0; return render();
         case "thinkNow":
           if (ui.think) ui.think.handle.stop();
           return;
@@ -1280,6 +1355,7 @@
       if (el.dataset.cheat) {
         const k = el.dataset.cheat;
         S.cheat[k] = el.checked;
+        if (k === "feed" || k === "reveal") markSugDirty(); // 建議的條件變了：新增一筆紀錄
         const names = {
           infinite: "無限回合", reveal: "上帝視角", feed: "上帝視角餵給我方電腦", add: "添加棋子", del: "刪除棋子",
           drag: "拖曳搬動", swap: "交換兩邊棋盤", ignorePlacement: "無視佈局條件", undo: "悔棋",

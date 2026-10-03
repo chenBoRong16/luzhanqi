@@ -226,13 +226,15 @@
     const prev = omniscient;
     omniscient = !!opts.omniscient;
     try {
-      return scoreMovesInner(S, side, rng, L, opts.out || null, !!opts.explain);
+      const ex = opts.exclude && (opts.exclude.size || opts.exclude.length) ? new Set(opts.exclude) : null;
+      return scoreMovesInner(S, side, rng, L, opts.out || null, !!opts.explain, ex);
     } finally {
       omniscient = prev;
     }
   }
 
-  function scoreMovesInner(S, side, rng, L, out, explain) {
+  /** exclude：玩家排除的我方格子（AI 建議不選）；除了它們沒有別步可走時才回傳，並標 onlyExcluded */
+  function scoreMovesInner(S, side, rng, L, out, explain, exclude) {
     const V = S.V, B = S.board;
     const enemies = [];
     let flagHolders = 0;
@@ -322,6 +324,7 @@
     let best = null, bestScore = -Infinity;
     // 不佔軍旗時保留不走的手（撞可能的軍旗、放水時吃最後一顆能動的棋）：快輸時才用（避免輸優先）
     let held = null, heldScore = -Infinity;
+    let exBest = null, exScore = -Infinity;
     let lastMobile = -1;
     if (L.spareLast) {
       let cnt = 0;
@@ -532,6 +535,10 @@
           if (score > heldScore) { heldScore = score; held = { from, mv, score, held: true }; }
           continue;
         }
+        if (exclude && exclude.has(from)) {
+          if (score > exScore) { exScore = score; exBest = { from, mv, score, onlyExcluded: true }; }
+          continue;
+        }
         if (out) out.push(why ? { from, mv, score, why: Object.assign({}, why) } : { from, mv, score });
         if (score > bestScore) { bestScore = score; best = { from, mv, score }; }
       }
@@ -540,6 +547,11 @@
     if (held && (!best || bestScore < -FLAG_DANGER * 0.5)) {
       if (out) out.push(held);
       return held;
+    }
+    // 只剩被排除的棋能動：照樣回傳（不走就判負）
+    if (!best && exBest) {
+      if (out) out.push(exBest);
+      return exBest;
     }
     return best;
   }

@@ -375,3 +375,8 @@ ul.legend li { margin: 3px 0; }
 /* 被工兵爆破的防護格：斜線破損紋（黑白列印也看得出來） */
 .cell.ruined { background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgba(120, 60, 30, .55) 6px 9px); }
 .cell.ruined::after { content: "已炸毀"; position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%); font-size: calc(var(--u) * 11); color: #7a3b1d; pointer-events: none; }
+
+/* AI 建議列、排除標記 */
+.sug-row { margin: 6px 0; padding: 8px 10px; border: 1px dashed var(--accent); border-radius: 7px; font-size: 14px; }
+.sug-row .row { margin: 6px 0 2px; align-items: center; gap: 6px; }
+.piece .px { position: absolute; left: -4px; top: -6px; font-size: calc(var(--u) * 12); background: #7a1d1d; color: #fff; border-radius: 4px; padding: 0 3px; }

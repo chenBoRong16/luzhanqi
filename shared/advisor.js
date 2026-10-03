@@ -56,6 +56,7 @@
   function adviceFor(S, side, settings, opts, move) {
     const res = LZ.aiSearch(S, side, LZ.aiRng(seedOf(S)), adviceSettings(settings),
       Object.assign({}, opts, { explain: true, extra: [move] }));
+    // 走棋提醒帶 exclude 時，「AI 會走」的那一步不會是被排除的棋（玩家這一手本身不受排除影響）
     return judge(S.V, res, move);
   }
 

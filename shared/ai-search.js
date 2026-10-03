@@ -169,7 +169,7 @@
     const L = LZ.aiResolveBrain(V, settings, style);
     const omniscient = !!opts.omniscient;
     const list = [];
-    const rootPick = LZ.aiScoreMoves(S, side, rng, L, { omniscient, out: list, explain: !!opts.explain });
+    const rootPick = LZ.aiScoreMoves(S, side, rng, L, { omniscient, out: list, explain: !!opts.explain, exclude: opts.exclude });
     state.rootPick = rootPick;
     state.best = () => rootPick;
     const P = DEPTHS[depth];
@@ -262,9 +262,10 @@
   /** 搜尋結束時每一手的分數：推演過的用推演後的分數，其餘用深度 1 分數 */
   function scoredOf(state) {
     const out = new Map();
+    const deep = new Set();
     for (const m of state.list || []) out.set(m, m.score);
-    if (state.cands && state.total) for (const c of state.cands) if (c.n) out.set(c.c, state.total(c));
-    return [...out].map(([m, score]) => ({ from: m.from, mv: m.mv, score, why: m.why, held: m.held }));
+    if (state.cands && state.total) for (const c of state.cands) if (c.n) { out.set(c.c, state.total(c)); deep.add(c.c); }
+    return [...out].map(([m, score]) => ({ from: m.from, mv: m.mv, score, why: m.why, held: m.held, onlyExcluded: m.onlyExcluded, deep: deep.has(m) }));
   }
 
   const now = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
